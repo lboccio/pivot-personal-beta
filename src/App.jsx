@@ -62,7 +62,17 @@ const STARTS = [
 ];
 
 const PLACES = [
-  { id: "p1", name: "Elm Street Café", neighborhood: "Back Bay", lat: 42.3496, lng: -71.079, category: "coffee", vibes: ["cozy"], price: 1, dietary: ["veg"], hours: { open: 7, close: 20 }, noise: "low" },
+  {
+  id: "my1",
+  name: "Thinking Cup – Newbury",
+  neighborhood: "Back Bay",
+  lat: 42.3499, lng: -71.0830,
+  category: "coffee",
+  vibes: ["cozy", "low-stim"],
+  price: 2,
+  hours: { open: 7, close: 20 },
+  noise: "med"
+},
   { id: "p2", name: "Harbor Noodles", neighborhood: "Seaport", lat: 42.3508, lng: -71.041, category: "eat", vibes: ["buzzy"], price: 2, hours: { open: 11, close: 22.5 }, noise: "med" },
   { id: "p3", name: "Brick Gallery", neighborhood: "SoWa", lat: 42.341, lng: -71.065, category: "gallery", vibes: ["artsy","low-stim"], price: 1, hours: { open: 10, close: 18 }, noise: "low" },
   { id: "p4", name: "Riverside Walk", neighborhood: "Cambridgeport", lat: 42.357, lng: -71.114, category: "park", vibes: ["low-stim","cozy"], price: 1, hours: { open: 0, close: 24 }, noise: "low" },
@@ -213,7 +223,7 @@ export default function PivotPersonalBeta() {
         <div className="mx-auto max-w-5xl px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="text-xl font-semibold">
-              Pivot <span className="text-sm align-top">beta·beta·beta</span>
+              Pivot <span className="text-sm align-top">beta for Laura ✨</span>
             </div>
             <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">personal build</span>
           </div>
