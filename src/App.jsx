@@ -305,7 +305,7 @@ export default function PivotPersonalBeta() {
         <div className="mx-auto max-w-5xl px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="text-xl font-semibold">
-              Pivot <span className="text-sm align-top">beta for Laura ✨</span>
+              Pivot <span className="text-sm align-top">beta practice run ✨</span>
             </div>
             <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">personal build</span>
             <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-100 text-neutral-700">
