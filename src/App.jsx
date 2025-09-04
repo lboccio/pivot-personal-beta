@@ -94,10 +94,19 @@ function inferVibes(p) {
 }
 // ---- Data
 const STARTS = [
+  // Boston
   { label: "Boston Common", lat: 42.355, lng: -71.065 },
   { label: "Back Bay", lat: 42.35, lng: -71.081 },
   { label: "Seaport", lat: 42.351, lng: -71.043 },
   { label: "Cambridgeport", lat: 42.356, lng: -71.11 },
+  { label: "North End", lat: 42.365, lng: -71.055 }, // zip 02113 approx
+
+  // NYC
+  { label: "Central Park", lat: 40.7829, lng: -73.9654 },
+  { label: "Times Square", lat: 40.758, lng: -73.9855 },
+  { label: "Brooklyn Bridge", lat: 40.7061, lng: -73.9969 },
+  { label: "Williamsburg", lat: 40.7081, lng: -73.9571 },
+  { label: "LaGuardia Airport", lat: 40.7769, lng: -73.8740 },
 ];
 
 const PLACES = [];
