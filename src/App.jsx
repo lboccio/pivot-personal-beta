@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { textSearchBrowser } from "./googlePlacesBrowser";
 
 function haversineMiles(a, b) {
   const toRad = (d) => (d * Math.PI) / 180;
@@ -53,6 +54,44 @@ function priceToSymbol(p) {
   return "$".repeat(p);
 }
 
+
+function mapPlace(p) {
+  return {
+    id: p.place_id,
+    name: p.name,
+    neighborhood: (p.vicinity || p.formatted_address || "").split(",")[0] || "",
+    lat: p.geometry?.location?.lat,
+    lng: p.geometry?.location?.lng,
+    category: inferCategory(p),
+    vibes: inferVibes(p),
+    price: p.price_level ? Math.max(1, Math.min(3, p.price_level)) : 2,
+    hours: { open: 0, close: 24 },
+    noise: "med",
+    open_now: p.opening_hours?.open_now === true
+  };
+}
+
+function inferCategory(p) {
+  const types = p.types || [];
+  if (types.includes("cafe") || types.includes("coffee_shop")) return "coffee";
+  if (types.includes("restaurant")) return "eat";
+  if (types.includes("bar")) return "bar";
+  if (types.includes("park")) return "park";
+  if (types.includes("museum") || types.includes("art_gallery")) return "gallery";
+  return "shop";
+}
+
+function inferVibes(p) {
+  const name = (p.name || "").toLowerCase();
+  const types = (p.types || []).join(" ");
+  const text = `${name} ${types}`;
+  const vibes = [];
+  if (text.match(/gallery|museum|book|vinyl/)) vibes.push("artsy");
+  if (text.match(/bar|club|taproom|pub/)) vibes.push("buzzy");
+  if (text.match(/cafe|coffee|tea|park|garden/)) vibes.push("cozy");
+  if (text.match(/library|museum|park/)) vibes.push("low-stim");
+  return vibes.length ? vibes : ["cozy"];
+}
 // ---- Data
 const STARTS = [
   { label: "Boston Common", lat: 42.355, lng: -71.065 },
@@ -61,38 +100,45 @@ const STARTS = [
   { label: "Cambridgeport", lat: 42.356, lng: -71.11 },
 ];
 
-const PLACES = [
-  {
-  id: "my1",
-  name: "Thinking Cup – Newbury",
-  neighborhood: "Back Bay",
-  lat: 42.3499, lng: -71.0830,
-  category: "coffee",
-  vibes: ["cozy", "low-stim"],
-  price: 2,
-  hours: { open: 7, close: 20 },
-  noise: "med"
-},
-  { id: "p2", name: "Harbor Noodles", neighborhood: "Seaport", lat: 42.3508, lng: -71.041, category: "eat", vibes: ["buzzy"], price: 2, hours: { open: 11, close: 22.5 }, noise: "med" },
-  { id: "p3", name: "Brick Gallery", neighborhood: "SoWa", lat: 42.341, lng: -71.065, category: "gallery", vibes: ["artsy","low-stim"], price: 1, hours: { open: 10, close: 18 }, noise: "low" },
-  { id: "p4", name: "Riverside Walk", neighborhood: "Cambridgeport", lat: 42.357, lng: -71.114, category: "park", vibes: ["low-stim","cozy"], price: 1, hours: { open: 0, close: 24 }, noise: "low" },
-  { id: "p5", name: "Beacon Pies", neighborhood: "Beacon Hill", lat: 42.3576, lng: -71.07, category: "dessert", vibes: ["cozy"], price: 2, dietary: ["veg"], hours: { open: 12, close: 23 }, noise: "med" },
-  { id: "p6", name: "Loft Bar", neighborhood: "Back Bay", lat: 42.3486, lng: -71.082, category: "bar", vibes: ["buzzy"], price: 3, hours: { open: 16, close: 1 }, noise: "high" },
-  { id: "p7", name: "Canal Espresso", neighborhood: "West End", lat: 42.366, lng: -71.062, category: "coffee", vibes: ["artsy","cozy"], price: 2, hours: { open: 7, close: 18.5 }, noise: "low" },
-  { id: "p8", name: "Garden Dumplings", neighborhood: "Chinatown", lat: 42.351, lng: -71.062, category: "eat", vibes: ["buzzy"], price: 2, hours: { open: 11, close: 23 }, noise: "med" },
-  { id: "p9", name: "Quiet Pages Bookshop", neighborhood: "Back Bay", lat: 42.3502, lng: -71.079, category: "shop", vibes: ["low-stim","cozy"], price: 1, hours: { open: 10, close: 20 }, noise: "low" },
-  { id: "p10", name: "Seaport Gelato", neighborhood: "Seaport", lat: 42.352, lng: -71.041, category: "dessert", vibes: ["buzzy"], price: 2, hours: { open: 12, close: 22 }, noise: "med" },
-  { id: "p11", name: "Indigo Studio", neighborhood: "South End", lat: 42.342, lng: -71.071, category: "gallery", vibes: ["artsy"], price: 1, hours: { open: 11, close: 19 }, noise: "low" },
-  { id: "p12", name: "Green Courtyard", neighborhood: "MIT", lat: 42.359, lng: -71.093, category: "park", vibes: ["low-stim"], price: 1, hours: { open: 0, close: 24 }, noise: "low" },
-  { id: "p13", name: "North End Slice", neighborhood: "North End", lat: 42.365, lng: -71.055, category: "eat", vibes: ["cozy"], price: 1, hours: { open: 11, close: 24 }, noise: "med" },
-  { id: "p14", name: "Vinyl & Vibes", neighborhood: "Allston", lat: 42.353, lng: -71.132, category: "shop", vibes: ["artsy","buzzy"], price: 1, hours: { open: 12, close: 20 }, noise: "med" },
-  { id: "p15", name: "Lantern Bar", neighborhood: "Seaport", lat: 42.3515, lng: -71.044, category: "bar", vibes: ["buzzy"], price: 3, hours: { open: 17, close: 1 }, noise: "high" },
-  { id: "p16", name: "River Bean", neighborhood: "Cambridgeport", lat: 42.358, lng: -71.107, category: "coffee", vibes: ["cozy"], price: 1, hours: { open: 7, close: 18 }, noise: "low" },
-  { id: "p17", name: "Soft Lights Lounge", neighborhood: "South End", lat: 42.34, lng: -71.072, category: "bar", vibes: ["cozy","low-stim"], price: 2, hours: { open: 17, close: 0.5 }, noise: "med" },
-  { id: "p18", name: "Harbor Sketch Museum", neighborhood: "Seaport", lat: 42.35, lng: -71.039, category: "gallery", vibes: ["artsy","low-stim"], price: 2, hours: { open: 10, close: 20 }, noise: "low" },
-];
+const PLACES = [];
 
 // ---- Scoring
+function inferCategoryFromTypes(types = []) {
+  if (types.includes("cafe") || types.includes("coffee_shop")) return "coffee";
+  if (types.includes("restaurant")) return "eat";
+  if (types.includes("bar")) return "bar";
+  if (types.includes("park")) return "park";
+  if (types.includes("museum") || types.includes("art_gallery")) return "gallery";
+  return "shop";
+}
+
+function inferVibesFromNameTypes(p) {
+  const name = (p.name || "").toLowerCase();
+  const types = (p.types || []).join(" ");
+  const text = `${name} ${types}`;
+  const vibes = [];
+  if (text.match(/gallery|museum|book|vinyl/)) vibes.push("artsy");
+  if (text.match(/bar|club|taproom|pub/)) vibes.push("buzzy");
+  if (text.match(/cafe|coffee|tea|park|garden/)) vibes.push("cozy");
+  if (text.match(/library|museum|park/)) vibes.push("low-stim");
+  return vibes.length ? vibes : ["cozy"];
+}
+
+function mapPlaceFromJs(p) {
+  return {
+    id: p.place_id,
+    name: p.name,
+    neighborhood: (p.vicinity || p.formatted_address || "").split(",")[0] || "",
+    lat: p.geometry?.location?.lat?.() ?? p.geometry?.location?.lat ?? null,
+    lng: p.geometry?.location?.lng?.() ?? p.geometry?.location?.lng ?? null,
+    category: inferCategoryFromTypes(p.types || []),
+    vibes: inferVibesFromNameTypes(p),
+    price: p.price_level ? Math.max(1, Math.min(3, p.price_level)) : 2,
+    hours: { open: 0, close: 24 },
+    noise: "med",
+    open_now: p.opening_hours?.isOpen?.() ?? p.opening_hours?.open_now ?? undefined
+  };
+}
 function scorePlace(place, prefs) {
   let s = 0;
   const os = openStatus(place);
@@ -142,6 +188,9 @@ export default function PivotPersonalBeta() {
   const [plan, setPlan] = useState([]);
   const [alternates, setAlternates] = useState([]);
   const [copied, setCopied] = useState(false);
+  const [livePlaces, setLivePlaces] = useState([]);
+  const [lastError, setLastError] = useState("");
+  const [debugInfo, setDebugInfo] = useState(null);
 
   // Restore from URL
   useEffect(() => {
@@ -178,15 +227,47 @@ export default function PivotPersonalBeta() {
 
   const startPoint = useMemo(() => ({ lat: start.lat, lng: start.lng }), [start]);
 
-  function buildPlan(exclude = new Set()) {
+  async function buildPlan(exclude = new Set()) {
     const prefs = { vibes, priceCap, start: startPoint };
-    const ranked = PLACES
-      .filter((p) => !exclude.has(p.id))
-      .map((p) => ({ p, meta: scorePlace(p, prefs) }))
+    setLastError("");
+
+    // Build a simple query from vibes
+    const q = vibes.includes("buzzy") ? "bar OR restaurant"
+      : vibes.includes("artsy") ? "gallery OR museum OR cafe"
+      : "coffee OR cafe OR restaurant";
+
+    // Use current start location
+    const loc = { lat: startPoint.lat, lng: startPoint.lng };
+
+    let results = [];
+    try {
+      results = await textSearchBrowser({ query: q, location: loc, radius: 1800, openNow: true });
+      setDebugInfo({ count: Array.isArray(results) ? results.length : 0 });
+    } catch (e) {
+      console.error("[Pivot] buildPlan JS Places failed:", e);
+      setLastError("Google Places request failed. " + (e?.message || ""));
+      setPlan([]);
+      setAlternates([]);
+      return;
+    }
+
+    const mapped = results.map(mapPlaceFromJs).filter(p => p.lat && p.lng && !exclude.has(p.id));
+    setLivePlaces(mapped);
+
+    if (!mapped.length) {
+      setLastError("No results returned. Check billing and that Maps JavaScript API is enabled.");
+      setPlan([]);
+      setAlternates([]);
+      return;
+    }
+
+    const ranked = mapped
+      .map(p => ({ p, meta: scorePlace(p, prefs) }))
       .sort((a, b) => b.meta.score - a.meta.score);
 
-    const chosen = ranked.slice(0, 3).map((r) => r.p.id);
-    const alts = ranked.slice(3, 7).map((r) => r.p.id);
+    const chosen = ranked.slice(0, 3).map(r => r.p.id);
+    const alts = ranked.slice(3, 7).map(r => r.p.id);
+
     setPlan(chosen);
     setAlternates(alts);
 
@@ -214,8 +295,9 @@ export default function PivotPersonalBeta() {
     });
   }
 
-  const selectedPlaces = plan.map((id) => PLACES.find((p) => p.id === id)).filter(Boolean);
-  const altPlaces = alternates.map((id) => PLACES.find((p) => p.id === id)).filter(Boolean);
+  const sourceList = livePlaces.length ? livePlaces : PLACES;
+  const selectedPlaces = plan.map(id => sourceList.find(p => p.id === id)).filter(Boolean);
+  const altPlaces = alternates.map(id => sourceList.find(p => p.id === id)).filter(Boolean);
 
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900">
@@ -226,6 +308,9 @@ export default function PivotPersonalBeta() {
               Pivot <span className="text-sm align-top">beta for Laura ✨</span>
             </div>
             <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">personal build</span>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-100 text-neutral-700">
+              {import.meta.env.VITE_GOOGLE_MAPS_API_KEY ? "API key loaded" : "API key missing"}
+            </span>
           </div>
           <button
             onClick={copyShare}
@@ -237,6 +322,23 @@ export default function PivotPersonalBeta() {
       </header>
 
       <main className="mx-auto max-w-5xl px-4 py-6 grid md:grid-cols-3 gap-6">
+        {lastError ? (
+          <div className="md:col-span-3 mb-2 p-3 rounded-xl border border-rose-200 bg-rose-50 text-rose-800 text-sm">
+            {lastError}
+          </div>
+        ) : null}
+        {(() => {
+          const showDebug = new URLSearchParams(window.location.search).get("debug") === "1";
+          if (!showDebug || !debugInfo) return null;
+          return (
+            <div className="md:col-span-3 mb-2 p-3 rounded-xl border border-sky-200 bg-sky-50 text-sky-800 text-xs">
+              <div className="font-medium mb-1">Debug</div>
+              <div>URL: <span className="break-all">{debugInfo.url}</span></div>
+              <div>Status: {debugInfo.status || "n/a"} · Results: {typeof debugInfo.count === "number" ? debugInfo.count : "n/a"}</div>
+              {debugInfo.error ? <div>Error: {debugInfo.error}</div> : null}
+            </div>
+          );
+        })()}
         {/* Controls */}
         <section className="md:col-span-1 space-y-6">
           <div className="p-4 bg-white rounded-2xl shadow-sm border">
@@ -398,7 +500,7 @@ function PlaceCard({ place, index, start }) {
         <div className="mt-1 text-sm text-neutral-600 flex flex-wrap gap-3">
           {mins ? <span>~{mins} min walk</span> : <span>distance unknown</span>}
           <span>Noise: {place.noise}</span>
-          <span>Status: {os.label}</span>
+          <span>Status: {place.open_now === true ? "Open" : place.open_now === false ? "Closed" : os.label}</span>
         </div>
         {reasons.length > 0 && (
           <div className="mt-2 text-xs text-neutral-600">Why we picked it: {reasons.join(" · ")}</div>
