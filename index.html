@@ -5,6 +5,32 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vite + React</title>
+    <meta name="color-scheme" content="light dark" />
+    <style>
+      /* Minimal dark-mode fallback so the toggle visibly works */
+      :root{--nf-100:#f5f5f5;--nf-300:#d4d4d4;--nf-700:#404040;--nf-800:#262626;--nf-900:#171717}
+      .dark .dark\:bg-neutral-900{background-color:var(--nf-900)!important}
+      .dark .dark\:bg-neutral-800\/70{background-color:rgba(38,38,38,.7)!important}
+      .dark .dark\:hover\:bg-neutral-800:hover{background-color:var(--nf-800)!important}
+      .dark .dark\:text-neutral-100{color:var(--nf-100)!important}
+      .dark .dark\:text-neutral-300{color:var(--nf-300)!important}
+      .dark .dark\:border-neutral-700{border-color:var(--nf-700)!important}
+      .dark .dark\:border-neutral-800{border-color:var(--nf-800)!important}
+    </style>
+    <script>
+      (() => {
+        try {
+          let t = localStorage.getItem('theme');
+          if (t !== 'dark' && t !== 'light') {
+            t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }
+          if (t === 'dark') document.documentElement.classList.add('dark');
+          else document.documentElement.classList.remove('dark');
+        } catch (e) {
+          // no-op
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,0 +1,25 @@
+/* Fallback dark-mode utilities to ensure toggle works even if Tailwind
+   doesn't generate dark: variants during dev. Only covers classes used here. */
+
+/* Neutral palette approximations matching Tailwind neutral scale */
+:root {
+  --nf-100: #f5f5f5; /* neutral-100 */
+  --nf-300: #d4d4d4; /* neutral-300 */
+  --nf-700: #404040; /* neutral-700 */
+  --nf-800: #262626; /* neutral-800 */
+  --nf-900: #171717; /* neutral-900 */
+}
+
+/* Backgrounds */
+.dark .dark\:bg-neutral-900 { background-color: var(--nf-900) !important; }
+.dark .dark\:bg-neutral-800\/70 { background-color: rgba(38, 38, 38, 0.7) !important; }
+.dark .dark\:hover\:bg-neutral-800:hover { background-color: var(--nf-800) !important; }
+
+/* Text colors */
+.dark .dark\:text-neutral-100 { color: var(--nf-100) !important; }
+.dark .dark\:text-neutral-300 { color: var(--nf-300) !important; }
+
+/* Borders */
+.dark .dark\:border-neutral-700 { border-color: var(--nf-700) !important; }
+.dark .dark\:border-neutral-800 { border-color: var(--nf-800) !important; }
+
