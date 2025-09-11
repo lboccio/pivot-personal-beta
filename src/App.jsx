@@ -775,6 +775,14 @@ export default function PivotPersonalBeta() {
                   disabled={viewOnly}
                 />
               </div>
+              <div className="mt-4">
+                <h3 className="font-medium mb-2">Comments</h3>
+                {event.user && event.slug ? (
+                  <CommentsPanel user={event.user} slug={event.slug} disabled={viewOnly} />
+                ) : (
+                  <div className="text-xs text-neutral-500">Create an event to enable comments.</div>
+                )}
+              </div>
               <div className="mt-3 flex gap-2">
                 {event.user && event.slug ? (
                   <button
@@ -1172,6 +1180,227 @@ function AltCard({ place, start, onPick }) {
           </button>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function CommentsPanel({ user, slug, disabled }) {
+  const [list, setList] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState("");
+  const [notice, setNotice] = React.useState("");
+  const [name, setName] = React.useState("");
+  const [text, setText] = React.useState("");
+
+  const storageKey = `chatname:${user}/${slug}`;
+  const localKey = `chatlocal:${user}/${slug}`;
+  const sessionNameKey = `chatname-session:${user}/${slug}`;
+  const localOnlyFlagKey = `chatlocal-flag:${user}/${slug}`;
+  const [localOnly, setLocalOnly] = React.useState(() => {
+    try { return sessionStorage.getItem(localOnlyFlagKey) === '1'; } catch { return false; }
+  });
+
+  React.useEffect(() => {
+    // Per-tab session default; do not reuse last person's name.
+    try {
+      const sessionSaved = sessionStorage.getItem(sessionNameKey);
+      if (sessionSaved) { setName(sessionSaved); return; }
+    } catch {}
+    setName(`guest-${(Math.random().toString(36).slice(2, 6))}`);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, slug]);
+
+  React.useEffect(() => {
+    if (!name) return;
+    try { sessionStorage.setItem(sessionNameKey, name); } catch {}
+  }, [name, sessionNameKey]);
+
+  async function load() {
+    try {
+      const up = encodeURIComponent;
+      if (localOnly) {
+        try {
+          const raw = localStorage.getItem(localKey);
+          const arr = raw ? JSON.parse(raw) : [];
+          setList(Array.isArray(arr) ? arr : []);
+          setError("");
+          if (!notice) setNotice('Comments running in local-only mode (no backend).');
+        } catch {}
+        return;
+      }
+      const r = await fetch(`/api/events/${up(user)}/${up(slug)}/comments`);
+      if (!r.ok) {
+        let msg = `Failed to load (${r.status})`;
+        try { const j = await r.json(); if (j?.error) msg = j.error; if (j?.message) msg = j.message; } catch {}
+        if (r.status === 404 || r.status === 501) {
+          // Likely running locally or backend unconfigured. Switch to local-only mode.
+          setLocalOnly(true);
+          try { sessionStorage.setItem(localOnlyFlagKey, '1'); } catch {}
+          setNotice('Comments running in local-only mode (no backend).');
+          setError("");
+          try {
+            const raw = localStorage.getItem(localKey);
+            const arr = raw ? JSON.parse(raw) : [];
+            setList(Array.isArray(arr) ? arr : []);
+            return;
+          } catch {}
+        }
+        throw new Error(msg);
+      }
+      const ct = (r.headers.get('content-type') || '').toLowerCase();
+      if (!ct.includes('application/json')) {
+        // dev server likely returned HTML. Go local-only.
+        setLocalOnly(true);
+        try { sessionStorage.setItem(localOnlyFlagKey, '1'); } catch {}
+        setNotice('Comments running in local-only mode (no backend).');
+        setError("");
+        try {
+          const raw = localStorage.getItem(localKey);
+          const arr = raw ? JSON.parse(raw) : [];
+          setList(Array.isArray(arr) ? arr : []);
+        } catch {}
+        return;
+      }
+      const data = await r.json();
+      setList(Array.isArray(data?.comments) ? data.comments : []);
+      setError("");
+      setNotice("");
+    } catch (e) {
+      // As a last resort, fall back to local-only
+      setLocalOnly(true);
+      try { sessionStorage.setItem(localOnlyFlagKey, '1'); } catch {}
+      try {
+        const raw = localStorage.getItem(localKey);
+        const arr = raw ? JSON.parse(raw) : [];
+        setList(Array.isArray(arr) ? arr : []);
+        setError("");
+        setNotice('Comments running in local-only mode (no backend).');
+      } catch {
+        setError(e?.message || "Failed to load comments");
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  React.useEffect(() => {
+    setLoading(true);
+    load();
+    const id = setInterval(load, 5000);
+    return () => clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, slug]);
+
+  async function send() {
+    const t = text.trim();
+    if (!t) return;
+    if (disabled) return;
+    try {
+      const up = encodeURIComponent;
+      const r = localOnly ? { ok: false, status: 404 } : await fetch(`/api/events/${up(user)}/${up(slug)}/comments`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, text: t })
+      });
+      if (!r.ok) {
+        let msg = `Failed to send (${r.status})`;
+        try { if ('json' in r) { const j = await r.json(); if (j?.error) msg = j.error; if (j?.message) msg = j.message; } } catch {}
+        if (r.status === 404 || r.status === 501) {
+          // Local-only or backend not configured: store in localStorage for dev testing.
+          const c = { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, ts: Date.now(), name: name || 'guest', text: t, mentions: [] };
+          try {
+            const raw = localStorage.getItem(localKey);
+            const arr = raw ? JSON.parse(raw) : [];
+            const next = Array.isArray(arr) ? [...arr, c] : [c];
+            localStorage.setItem(localKey, JSON.stringify(next.slice(-200)));
+            setList(next);
+            setText('');
+            setLocalOnly(true);
+            try { sessionStorage.setItem(localOnlyFlagKey, '1'); } catch {}
+            setNotice('Sent in local-only mode (no backend).');
+            return;
+          } catch {}
+        }
+        throw new Error(msg);
+      }
+      const d = await r.json();
+      const c = d?.comment;
+      if (c) setList(prev => [...prev, c]);
+      setText("");
+      setError("");
+    } catch (e) {
+      setError(e?.message || "Failed to send comment");
+    }
+  }
+
+  function formatTime(ts) {
+    try { return new Date(ts).toLocaleString(); } catch { return '';
+    }
+  }
+
+  function renderTextWithMentions(t) {
+    const parts = (t || "").split(/(\B@[a-z0-9_\-]+)/ig);
+    return parts.map((p, i) => {
+      if (p && p.startsWith('@')) {
+        return (
+          <span key={i} className="text-sky-700 dark:text-sky-300">{p}</span>
+        );
+      }
+      return <React.Fragment key={i}>{p}</React.Fragment>;
+    });
+  }
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center gap-2">
+        <input
+          className="flex-1 rounded-xl border px-3 py-2 text-sm dark:bg-neutral-800 dark:text-neutral-100 dark:border-neutral-700"
+          placeholder="Your name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          disabled={disabled}
+        />
+      </div>
+      <div className="max-h-64 overflow-y-auto border rounded-xl p-2 bg-white dark:bg-neutral-900 dark:border-neutral-800">
+        {loading ? (
+          <div className="text-xs text-neutral-500 p-2">Loading…</div>
+        ) : list.length === 0 ? (
+          <div className="text-xs text-neutral-500 p-2">No comments yet. Start the conversation!</div>
+        ) : (
+          <div className="space-y-2">
+            {list.map((c) => (
+              <div key={c.id} className="text-sm">
+                <div className="flex items-baseline gap-2">
+                  <span className="font-medium">{c.name || 'guest'}</span>
+                  <span className="text-xs text-neutral-500">{formatTime(c.ts)}</span>
+                </div>
+                <div className="whitespace-pre-wrap break-words">{renderTextWithMentions(c.text)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="mt-2 flex gap-2">
+        <textarea
+          className="flex-1 rounded-xl border px-3 py-2 text-sm dark:bg-neutral-800 dark:text-neutral-100 dark:border-neutral-700"
+          rows={2}
+          placeholder="Write a comment… Use @name to tag someone"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+          disabled={disabled}
+        />
+        <button
+          onClick={send}
+          disabled={disabled || !text.trim()}
+          className="self-start text-sm px-3 py-2 rounded-xl font-medium text-white bg-neutral-900 border border-neutral-900 shadow-sm hover:shadow-md hover:opacity-95 active:opacity-90 active:translate-y-px transition dark:bg-neutral-700 dark:border-neutral-500 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Send
+        </button>
+      </div>
+      {error ? <div className="mt-1 text-xs text-rose-600">{error}</div> : null}
+      {notice ? <div className="mt-1 text-[11px] text-neutral-500">{notice}</div> : null}
+      <p className="mt-2 text-[11px] text-neutral-500">Comments are shared for this event URL. No accounts; names are editable and public.</p>
     </div>
   );
 }
