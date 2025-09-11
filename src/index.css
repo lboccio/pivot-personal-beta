@@ -1,1 +1,29 @@
 @import "tailwindcss";
+@source "../index.html";
+@source "./**/*.{js,jsx,ts,tsx}";
+
+:root {
+  --nf-100: #f5f5f5;
+  --nf-300: #d4d4d4;
+  --nf-700: #404040;
+  --nf-800: #262626;
+  --nf-900: #171717;
+}
+
+@layer utilities {
+  .dark .dark\:bg-neutral-900 { background-color: var(--nf-900); }
+  .dark .dark\:bg-neutral-800 { background-color: var(--nf-800); }
+  .dark .dark\:bg-neutral-700 { background-color: var(--nf-700); }
+  .dark .dark\:bg-neutral-800\/70 { background-color: rgba(38, 38, 38, 0.7); }
+
+  .dark .dark\:hover\:bg-neutral-800:hover { background-color: var(--nf-800); }
+  .dark .dark\:hover\:bg-neutral-700:hover { background-color: var(--nf-700); }
+
+  .dark .dark\:text-neutral-100 { color: var(--nf-100); }
+  .dark .dark\:text-neutral-200 { color: #e5e5e5; }
+  .dark .dark\:text-neutral-300 { color: var(--nf-300); }
+
+  .dark .dark\:border-neutral-700 { border-color: var(--nf-700); }
+  .dark .dark\:border-neutral-800 { border-color: var(--nf-800); }
+  .dark .dark\:border-neutral-500 { border-color: #737373; }
+}
