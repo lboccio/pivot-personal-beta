@@ -60,20 +60,31 @@ export default async function handler(req, res) {
 
     if (req.method === 'POST') {
       const body = typeof req.body === 'string' ? (() => { try { return JSON.parse(req.body); } catch { return {}; } })() : (req.body || {});
+      const auth = (req.headers['authorization'] || '').trim();
+      let authedUser = null;
+      if (auth.toLowerCase().startsWith('bearer ')) {
+        const token = auth.slice(7).trim();
+        authedUser = await verifyGoogleIdToken(token);
+      }
       let name = (body.name || '').toString().trim().slice(0, 64);
       let text = (body.text || '').toString().trim().slice(0, 1000);
       if (!text) return res.status(400).json({ error: 'Text required' });
+      if (authedUser?.name) name = authedUser.name;
       if (!name) name = 'guest';
       const id = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2, 8);
       const ts = Date.now();
       const mentions = Array.from(new Set((text.match(/(^|\s)@([a-z0-9_\-]+)/ig) || []).map(m => m.trim().replace(/^@/, '').toLowerCase())));
       const comment = { id, ts, name, text, mentions };
+      if (authedUser) {
+        comment.user = { id: authedUser.sub, email: authedUser.email, name: authedUser.name, picture: authedUser.picture };
+      }
 
       // Naive append with read-modify-write
       const arr = await kvGetArray();
       arr.push(comment);
       // Trim to last 500 comments to bound storage
       const trimmed = arr.slice(-500);
+import { verifyGoogleIdToken } from '../../../_lib/verifyGoogle';
       const result = await kvSetArray(trimmed);
       if (!result.ok) return res.status(502).json({ error: 'KV set failed', message: result.detail || undefined });
       return res.status(201).json({ comment });

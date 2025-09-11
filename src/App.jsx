@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { textSearchBrowser, geocodeText, autocompletePredictions, placeDetails } from "./googlePlacesBrowser";
+import { onAuthChange, getUser as authGetUser, signOut as authSignOut, renderGoogleButton, tryRestoreUser } from './auth';
 
 function haversineMiles(a, b) {
   const toRad = (d) => (d * Math.PI) / 180;
@@ -656,7 +657,16 @@ export default function PivotPersonalBeta() {
               {import.meta.env.VITE_GOOGLE_MAPS_API_KEY ? "API key loaded" : "API key missing"}
             </span>
           </div>
-          <div className="flex items-center">
+          <div className="flex items-center gap-2">
+            {authUser ? (
+              <div className="flex items-center gap-2 mr-2">
+                {authUser.picture ? <img src={authUser.picture} alt={authUser.name || 'User'} className="w-6 h-6 rounded-full" /> : null}
+                <span className="text-sm">{authUser.name || 'User'}</span>
+                <button onClick={authSignOut} className="text-xs border rounded-xl px-2 py-1 hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:border-neutral-700">Sign out</button>
+              </div>
+            ) : (
+              <div ref={signInRef} className="mr-2" />
+            )}
             <button
               onClick={toggleTheme}
               className="text-sm border rounded-xl px-3 py-1.5 mr-2 hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:border-neutral-700"
@@ -1199,6 +1209,8 @@ function CommentsPanel({ user, slug, disabled }) {
   const [localOnly, setLocalOnly] = React.useState(() => {
     try { return sessionStorage.getItem(localOnlyFlagKey) === '1'; } catch { return false; }
   });
+  const [signedInUser, setSignedInUser] = React.useState(null);
+  React.useEffect(() => onAuthChange(setSignedInUser), []);
 
   React.useEffect(() => {
     // Per-tab session default; do not reuse last person's name.
@@ -1206,9 +1218,10 @@ function CommentsPanel({ user, slug, disabled }) {
       const sessionSaved = sessionStorage.getItem(sessionNameKey);
       if (sessionSaved) { setName(sessionSaved); return; }
     } catch {}
-    setName(`guest-${(Math.random().toString(36).slice(2, 6))}`);
+    if (signedInUser && signedInUser.name) setName(signedInUser.name);
+    else setName(`guest-${(Math.random().toString(36).slice(2, 6))}`);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, slug]);
+  }, [user, slug, signedInUser?.sub]);
 
   React.useEffect(() => {
     if (!name) return;
@@ -1297,9 +1310,11 @@ function CommentsPanel({ user, slug, disabled }) {
     if (disabled) return;
     try {
       const up = encodeURIComponent;
+      const headers = { 'content-type': 'application/json' };
+      if (signedInUser && signedInUser.token) headers['Authorization'] = `Bearer ${signedInUser.token}`;
       const r = localOnly ? { ok: false, status: 404 } : await fetch(`/api/events/${up(user)}/${up(slug)}/comments`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers,
         body: JSON.stringify({ name, text: t })
       });
       if (!r.ok) {
@@ -1356,9 +1371,9 @@ function CommentsPanel({ user, slug, disabled }) {
         <input
           className="flex-1 rounded-xl border px-3 py-2 text-sm dark:bg-neutral-800 dark:text-neutral-100 dark:border-neutral-700"
           placeholder="Your name"
-          value={name}
+          value={signedInUser?.name || name}
           onChange={(e) => setName(e.target.value)}
-          disabled={disabled}
+          disabled={disabled || !!signedInUser}
         />
       </div>
       <div className="max-h-64 overflow-y-auto border rounded-xl p-2 bg-white dark:bg-neutral-900 dark:border-neutral-800">
@@ -1390,6 +1405,17 @@ function CommentsPanel({ user, slug, disabled }) {
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
           disabled={disabled}
         />
+  // --- Auth (Google optional)
+  const [authUser, setAuthUser] = useState(null);
+  const signInRef = useRef(null);
+  useEffect(() => { tryRestoreUser(); const off = onAuthChange(setAuthUser); return off; }, []);
+  useEffect(() => {
+    // Render button only if not signed in and client ID exists
+    const hasClient = !!import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID;
+    if (!authUser && hasClient && signInRef.current) {
+      renderGoogleButton(signInRef.current).catch(() => {});
+    }
+  }, [authUser]);
         <button
           onClick={send}
           disabled={disabled || !text.trim()}
