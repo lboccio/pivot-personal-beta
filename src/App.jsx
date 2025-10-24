@@ -612,6 +612,7 @@ export default function PivotPersonalBeta() {
     } catch {}
 
     setEvent(next);
+    setVibes(["cozy", "buzzy", "artsy", "low-stim"]);
     setPlan([]);
     setAlternates([]);
     setLocked([]);
@@ -885,15 +886,18 @@ export default function PivotPersonalBeta() {
               {startMatches.length > 0 && (
                 <div className="mt-2 space-y-1">
                   {startMatches.map((m, idx) => (
-                    <div key={`${m.lat},${m.lng},${idx}`} className="flex items-center gap-2 text-sm">
-                      <div
-                        className="flex-1 truncate cursor-pointer hover:underline"
+                    <div key={(m.place_id || idx)} className="flex items-center gap-2 text-sm">
+                      <button
+                        type="button"
+                        className="flex-1 truncate text-left underline-offset-2 hover:underline cursor-pointer"
                         title={m.label || m.description}
                         onClick={() => useStartMatch(m)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') useStartMatch(m); }}
                       >
                         {m.label || m.description}
-                      </div>
+                      </button>
                       <button
+                        type="button"
                         className="text-xs px-2 py-1 rounded-full border bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700"
                         onClick={() => useStartMatch(m)}
                       >
