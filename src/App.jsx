@@ -223,6 +223,9 @@ export default function PivotPersonalBeta() {
   const [startMatches, setStartMatches] = useState([]);
   const [startLoading, setStartLoading] = useState(false);
   const [startError, setStartError] = useState("");
+  const [vetoed, setVetoed] = useState(() => {
+    try { const raw = sessionStorage.getItem(vetoKey()); return raw ? JSON.parse(raw) : []; } catch { return []; }
+  });
 
   // --- Event meta and external links
   const [event, setEvent] = useState({ user: "", slug: "", name: "" });
@@ -231,6 +234,11 @@ export default function PivotPersonalBeta() {
   function eventKey(e = event) {
     if (!e?.user || !e?.slug) return "";
     return `event:${e.user}/${e.slug}`;
+  }
+
+  function vetoKey(e = event) {
+    if (!e?.user || !e?.slug) return "veto:default";
+    return `veto:${e.user}/${e.slug}`;
   }
 
   // Persist event-related state locally (per unique URL path)
@@ -359,6 +367,11 @@ export default function PivotPersonalBeta() {
     return () => clearTimeout(t);
   }, [startSearch]);
 
+  // persist vetoed list per-session per event
+  useEffect(() => {
+    try { sessionStorage.setItem(vetoKey(), JSON.stringify(vetoed)); } catch {}
+  }, [event.user, event.slug, vetoed]);
+
   // GPS
   useEffect(() => {
     if (!useGps) return;
@@ -371,6 +384,8 @@ export default function PivotPersonalBeta() {
         const preset = { label: "My location", lat: pos.coords.latitude, lng: pos.coords.longitude };
         setStart(preset);
         setGpsDenied(false);
+        // Auto-build when GPS resolves
+        setTimeout(() => buildPlan(new Set(), new Set(locked)), 0);
       },
       () => setGpsDenied(true),
       { enableHighAccuracy: true, timeout: 8000 }
@@ -416,6 +431,8 @@ export default function PivotPersonalBeta() {
       }
       setUseGps(false);
       setStartMatches([]);
+      // Auto-build after confirming a start
+      setTimeout(() => buildPlan(new Set(), new Set(locked)), 0);
     } catch (e) {
       setStartError("Could not select that place");
     }
@@ -445,7 +462,9 @@ export default function PivotPersonalBeta() {
       return;
     }
 
-    let mapped = results.map(mapPlaceFromJs).filter(p => p.lat && p.lng && !exclude.has(p.id));
+    const vetoSet = new Set(vetoed);
+    const excludeAll = new Set([...(exclude || []), ...vetoSet]);
+    let mapped = results.map(mapPlaceFromJs).filter(p => p.lat && p.lng && !excludeAll.has(p.id));
     // Ensure kept items exist in mapped by merging from known livePlaces
     if (keep && keep.size) {
       const byId = new Map(mapped.map(p => [p.id, p]));
@@ -484,7 +503,7 @@ export default function PivotPersonalBeta() {
     }
     const chosen = [...keepIds, ...fill].slice(0, 3);
 
-    const remainingForAlts = ranked.map(r => r.p.id).filter(id => !new Set(chosen).has(id) && !keep.has(id));
+    const remainingForAlts = ranked.map(r => r.p.id).filter(id => !new Set(chosen).has(id) && !keep.has(id) && !vetoSet.has(id));
     const alts = remainingForAlts.slice(0, 4);
 
     setPlan(chosen);
@@ -502,6 +521,14 @@ export default function PivotPersonalBeta() {
     const keepSet = new Set(locked);
     const exclude = new Set(plan.filter(id => !keepSet.has(id)));
     buildPlan(exclude, keepSet);
+  }
+
+  function veto(id) {
+    if (!id) return;
+    setVetoed(prev => (prev.includes(id) ? prev : [...prev, id]));
+    setLocked(prev => prev.filter(x => x !== id));
+    const keepSet = new Set(locked.filter(x => x !== id));
+    buildPlan(new Set(), keepSet);
   }
 
   function toggleVibe(v) {
@@ -824,6 +851,7 @@ export default function PivotPersonalBeta() {
                   setStart(s);
                   setUseGps(false);
                   setStartSearch(s?.label || "");
+                  setTimeout(() => buildPlan(new Set(), new Set(locked)), 0);
                 }}
               >
                 {STARTS.map((s) => (
@@ -941,6 +969,7 @@ export default function PivotPersonalBeta() {
               disabled={viewOnly}
               onClick={pivotOnce}
               className="flex-1 bg-white border rounded-2xl px-4 py-3 font-medium hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Swap suggestion"
             >
               Pivot
             </button>
@@ -951,6 +980,14 @@ export default function PivotPersonalBeta() {
               title="Clear all kept items"
             >
               Clear kept
+            </button>
+            <button
+              disabled={viewOnly}
+              onClick={() => setVetoed([])}
+              className="px-3 py-3 text-sm text-neutral-600 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Clear vetoed options"
+            >
+              Clear vetoes
             </button>
           </div>
           <p className="text-xs text-neutral-500">
@@ -975,7 +1012,7 @@ export default function PivotPersonalBeta() {
 
           <div className="grid gap-3">
             {selectedPlaces.map((p, i) => (
-              <PlaceCard key={p.id} place={p} index={i} start={startPoint} lockedSet={lockedSet} onToggleKeep={viewOnly ? null : toggleKeep} />
+              <PlaceCard key={p.id} place={p} index={i} start={startPoint} lockedSet={lockedSet} onToggleKeep={viewOnly ? null : toggleKeep} onVeto={viewOnly ? null : veto} />
             ))}
           </div>
 
@@ -984,7 +1021,7 @@ export default function PivotPersonalBeta() {
               <h3 className="font-semibold mb-2">Alternates</h3>
               <div className="grid md:grid-cols-2 gap-3">
                 {altPlaces.map((p) => (
-                  <AltCard key={p.id} place={p} start={startPoint} onPick={viewOnly ? null : (() => startReplaceWithAlternate(p))} />
+                  <AltCard key={p.id} place={p} start={startPoint} onPick={viewOnly ? null : (() => startReplaceWithAlternate(p))} onVeto={viewOnly ? null : (() => veto(p.id))} />
                 ))}
               </div>
               {replacePick ? (() => {
@@ -1082,7 +1119,7 @@ function TodoList({ todos, setTodos, disabled }) {
   );
 }
 
-function PlaceCard({ place, index, start, lockedSet, onToggleKeep }) {
+function PlaceCard({ place, index, start, lockedSet, onToggleKeep, onVeto }) {
   const dist = haversineMiles(start, { lat: place.lat, lng: place.lng });
   const mins = minutesWalk(dist);
   const os = openStatus(place);
@@ -1131,7 +1168,7 @@ function PlaceCard({ place, index, start, lockedSet, onToggleKeep }) {
             Open in Maps
           </a>
         </div>
-        <div className="mt-3 flex gap-2">
+        <div className="mt-3 flex gap-2 items-center">
           {place.vibes.map((v) => (
             <span key={v} className="text-xs px-2 py-1 rounded-full bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
               {v}
@@ -1142,13 +1179,22 @@ function PlaceCard({ place, index, start, lockedSet, onToggleKeep }) {
               {d}
             </span>
           ))}
+          {onVeto ? (
+            <button
+              onClick={() => onVeto(place.id)}
+              className="ml-auto text-xs px-2 py-0.5 rounded-full border bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700"
+              title="Hide this option"
+            >
+              Veto
+            </button>
+          ) : null}
         </div>
       </div>
     </div>
   );
 }
 
-function AltCard({ place, start, onPick }) {
+function AltCard({ place, start, onPick, onVeto }) {
   const dist = haversineMiles(start, { lat: place.lat, lng: place.lng });
   const mins = minutesWalk(dist);
   const os = openStatus(place);
@@ -1177,6 +1223,15 @@ function AltCard({ place, start, onPick }) {
             title="Replace a slot with this option"
           >
             Use
+          </button>
+        ) : null}
+        {onVeto ? (
+          <button
+            className="text-xs px-2 py-1 rounded-full border bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700"
+            onClick={onVeto}
+            title="Hide this option"
+          >
+            Veto
           </button>
         ) : null}
       </div>
