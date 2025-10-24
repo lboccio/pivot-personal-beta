@@ -287,6 +287,14 @@ export default function PivotPersonalBeta() {
   }, [theme]);
   const toggleTheme = () => setTheme(t => (t === "dark" ? "light" : "dark"));
 
+  // Ensure default vibes = all when not in an event and no prior state
+  useEffect(() => {
+    if ((!event.user || !event.slug) && (!Array.isArray(vibes) || vibes.length < 4)) {
+      setVibes(["cozy", "buzzy", "artsy", "low-stim"]);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Restore from URL (supports /:user/:slug and/or ?s=...)
   useEffect(() => {
     // Ensure no stray kept state on first load unless explicitly restored
@@ -691,19 +699,6 @@ export default function PivotPersonalBeta() {
               aria-label="Toggle dark mode"
             >
               {theme === "dark" ? "Light mode" : "Dark mode"}
-            </button>
-            <button
-              onClick={newEvent}
-              className="text-sm border rounded-xl px-3 py-1.5 mr-2 hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:border-neutral-700"
-            >
-              New event
-            </button>
-            <button
-              onClick={copyShare}
-              className="text-sm border rounded-xl px-3 py-1.5 mr-2 hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:border-neutral-700"
-              title="Copy clean event link (loads from backend)"
-            >
-              Clean link
             </button>
             <button
               onClick={copyShareSnapshot}
