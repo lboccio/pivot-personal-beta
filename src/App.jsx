@@ -208,7 +208,7 @@ export default function PivotPersonalBeta() {
   const [start, setStart] = useState(STARTS[0]);
   const [useGps, setUseGps] = useState(false);
   const [gpsDenied, setGpsDenied] = useState(false);
-  const [vibes, setVibes] = useState(["cozy"]);
+  const [vibes, setVibes] = useState(["cozy", "buzzy", "artsy", "low-stim"]);
   const [priceCap, setPriceCap] = useState(2);
   const [plan, setPlan] = useState([]);
   const [alternates, setAlternates] = useState([]);
@@ -886,7 +886,13 @@ export default function PivotPersonalBeta() {
                 <div className="mt-2 space-y-1">
                   {startMatches.map((m, idx) => (
                     <div key={`${m.lat},${m.lng},${idx}`} className="flex items-center gap-2 text-sm">
-                      <div className="flex-1 truncate" title={m.label || m.description}>{m.label || m.description}</div>
+                      <div
+                        className="flex-1 truncate cursor-pointer hover:underline"
+                        title={m.label || m.description}
+                        onClick={() => useStartMatch(m)}
+                      >
+                        {m.label || m.description}
+                      </div>
                       <button
                         className="text-xs px-2 py-1 rounded-full border bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700"
                         onClick={() => useStartMatch(m)}
