@@ -419,7 +419,7 @@ export default function PivotPersonalBeta() {
       localStorage.setItem("googleUser", JSON.stringify(nextUser));
     } catch {}
     const userId = profile.sub || profile.email;
-    if (userId) {
+    if (userId && supabase) {
       supabase
         .from("users")
         .upsert({
@@ -432,6 +432,8 @@ export default function PivotPersonalBeta() {
         .catch((err) => {
           console.error("[Pivot] Failed to upsert Supabase user", err);
         });
+    } else if (userId) {
+      console.warn("[Pivot] Supabase env vars missing; skipping user sync.");
     }
   }
 
