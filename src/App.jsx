@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { supabase } from "./supabaseClient";
 import { textSearchBrowser, geocodeText, autocompletePredictions, placeDetails } from "./googlePlacesBrowser";
 
 function haversineMiles(a, b) {
@@ -52,6 +53,63 @@ function openStatus(place) {
 
 function priceToSymbol(p) {
   return "$".repeat(p);
+}
+
+const GOOGLE_ID_SCRIPT_SRC = "https://accounts.google.com/gsi/client";
+
+function loadGoogleIdentityScript() {
+  return new Promise((resolve, reject) => {
+    if (typeof window === "undefined") {
+      reject(new Error("window unavailable"));
+      return;
+    }
+    if (window.google?.accounts?.id) {
+      resolve();
+      return;
+    }
+    let script = document.querySelector(`script[src="${GOOGLE_ID_SCRIPT_SRC}"]`);
+    const attachListeners = (el) => {
+      const onLoad = () => {
+        el.removeEventListener("load", onLoad);
+        el.removeEventListener("error", onError);
+        if (window.google?.accounts?.id) resolve();
+        else reject(new Error("Google Identity unavailable"));
+      };
+      const onError = () => {
+        el.removeEventListener("load", onLoad);
+        el.removeEventListener("error", onError);
+        reject(new Error("Failed to load Google Identity script"));
+      };
+      el.addEventListener("load", onLoad);
+      el.addEventListener("error", onError);
+    };
+    if (!script) {
+      script = document.createElement("script");
+      script.src = GOOGLE_ID_SCRIPT_SRC;
+      script.async = true;
+      script.defer = true;
+      script.dataset.purpose = "google-identity";
+      document.head.appendChild(script);
+    }
+    attachListeners(script);
+  });
+}
+
+function decodeGoogleJwt(token = "") {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padLength = (4 - (base64.length % 4)) % 4;
+    const padded = base64 + "=".repeat(padLength);
+    const decoded = atob(padded)
+      .split("")
+      .map((c) => `%${`00${c.charCodeAt(0).toString(16)}`.slice(-2)}`)
+      .join("");
+    return JSON.parse(decodeURIComponent(decoded));
+  } catch {
+    return null;
+  }
 }
 
 
@@ -223,6 +281,22 @@ export default function PivotPersonalBeta() {
   const [startMatches, setStartMatches] = useState([]);
   const [startLoading, setStartLoading] = useState(false);
   const [startError, setStartError] = useState("");
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+  const [googleUser, setGoogleUser] = useState(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = localStorage.getItem("googleUser");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [googleReady, setGoogleReady] = useState(false);
+  const [googleAuthError, setGoogleAuthError] = useState("");
+  const googleButtonRef = useRef(null);
+  const viewOnly = useMemo(() => new URLSearchParams(window.location.search).get("view") === "1", []);
+  const signedIn = Boolean(googleUser);
+  const editingLocked = viewOnly || !signedIn;
   const [vetoed, setVetoed] = useState(() => {
     try { const raw = sessionStorage.getItem(vetoKey()); return raw ? JSON.parse(raw) : []; } catch { return []; }
   });
@@ -286,6 +360,94 @@ export default function PivotPersonalBeta() {
     localStorage.setItem("theme", theme);
   }, [theme]);
   const toggleTheme = () => setTheme(t => (t === "dark" ? "light" : "dark"));
+
+  useEffect(() => {
+    if (!googleClientId) return;
+    let cancelled = false;
+    setGoogleAuthError("");
+    loadGoogleIdentityScript()
+      .then(() => {
+        if (cancelled || !window.google?.accounts?.id) return;
+        window.google.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: (response) => {
+            if (response?.credential) handleGoogleCredential(response.credential);
+          }
+        });
+        setGoogleReady(true);
+        window.google.accounts.id.prompt();
+      })
+      .catch(() => {
+        if (!cancelled) setGoogleAuthError("Google login failed to load.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [googleClientId]);
+
+  useEffect(() => {
+    if (!googleReady || !googleButtonRef.current || googleUser || !window.google?.accounts?.id) return;
+    googleButtonRef.current.innerHTML = "";
+    window.google.accounts.id.renderButton(googleButtonRef.current, {
+      type: "standard",
+      theme: theme === "dark" ? "filled_black" : "outline",
+      size: "medium",
+      shape: "pill",
+      text: "signin_with"
+    });
+  }, [googleReady, theme, googleUser]);
+
+  function handleGoogleCredential(token) {
+    if (!token) {
+      setGoogleAuthError("Google login failed.");
+      return;
+    }
+    const profile = decodeGoogleJwt(token);
+    if (!profile) {
+      setGoogleAuthError("Could not read Google login response.");
+      return;
+    }
+    const nextUser = {
+      name: profile.name || profile.email || "Google User",
+      email: profile.email || "",
+      picture: profile.picture || "",
+      givenName: profile.given_name || ""
+    };
+    setGoogleAuthError("");
+    setGoogleUser(nextUser);
+    try {
+      localStorage.setItem("googleUser", JSON.stringify(nextUser));
+    } catch {}
+    const userId = profile.sub || profile.email;
+    if (userId) {
+      supabase
+        .from("users")
+        .upsert({
+          id: userId,
+          email: profile.email || "",
+          name: profile.name || "",
+          picture: profile.picture || "",
+          given_name: profile.given_name || ""
+        })
+        .catch((err) => {
+          console.error("[Pivot] Failed to upsert Supabase user", err);
+        });
+    }
+  }
+
+  function handleGoogleSignOut() {
+    window.google?.accounts?.id?.disableAutoSelect?.();
+    try {
+      localStorage.removeItem("googleUser");
+    } catch {}
+    setGoogleUser(null);
+    if (googleButtonRef.current) {
+      googleButtonRef.current.innerHTML = "";
+    }
+    if (window.google?.accounts?.id) {
+      window.google.accounts.id.prompt();
+    }
+  }
 
   // Restore from URL (supports /:user/:slug and/or ?s=...)
   useEffect(() => {
@@ -362,10 +524,11 @@ export default function PivotPersonalBeta() {
 
   // Debounce start search suggestions
   useEffect(() => {
+    if (editingLocked) { setStartMatches([]); setStartError(""); return; }
     if (!startSearch || startSearch.trim().length < 3) { setStartMatches([]); setStartError(""); return; }
     const t = setTimeout(() => { findStart(); }, 250);
     return () => clearTimeout(t);
-  }, [startSearch]);
+  }, [startSearch, editingLocked]);
 
   // persist vetoed list per-session per event
   useEffect(() => {
@@ -391,6 +554,11 @@ export default function PivotPersonalBeta() {
       { enableHighAccuracy: true, timeout: 8000 }
     );
   }, [useGps]);
+  useEffect(() => {
+    if (editingLocked && useGps) {
+      setUseGps(false);
+    }
+  }, [editingLocked, useGps]);
 
   const startPoint = useMemo(() => ({ lat: start.lat, lng: start.lng }), [start]);
 
@@ -536,6 +704,7 @@ export default function PivotPersonalBeta() {
   }
 
   function copyShare() {
+    if (editingLocked) return;
     // Build a fresh share string so it reflects current state
     const state = { event, links, start, vibes, priceCap, plan, locked, todos, notes };
     const useCleanPath = event.user && event.slug;
@@ -549,6 +718,7 @@ export default function PivotPersonalBeta() {
   }
 
   function copyShareSnapshot() {
+    if (editingLocked) return;
     // Always embed the current state in the URL for a portable snapshot
     // Include known place details so kept items render without refetch
     const known = [...selectedPlaces, ...altPlaces].filter(Boolean);
@@ -628,7 +798,6 @@ export default function PivotPersonalBeta() {
   const selectedPlaces = plan.map(id => sourceList.find(p => p.id === id)).filter(Boolean);
   const altPlaces = alternates.map(id => sourceList.find(p => p.id === id)).filter(Boolean);
   const lockedSet = useMemo(() => new Set(locked), [locked]);
-  const viewOnly = useMemo(() => new URLSearchParams(window.location.search).get('view') === '1', []);
 
   function toggleKeep(id) {
     setLocked(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
@@ -683,37 +852,96 @@ export default function PivotPersonalBeta() {
               {import.meta.env.VITE_GOOGLE_MAPS_API_KEY ? "API key loaded" : "API key missing"}
             </span>
           </div>
-          <div className="flex items-center">
+          <div className="flex flex-wrap items-center justify-end gap-2 text-sm">
+            {googleClientId ? (
+              googleUser ? (
+                <div className="flex items-center gap-2 border rounded-full px-2 py-1 bg-white/70 dark:bg-neutral-800/70 dark:border-neutral-600">
+                  {googleUser.picture ? (
+                    <img
+                      src={googleUser.picture}
+                      alt={googleUser.name || "Google avatar"}
+                      className="w-7 h-7 rounded-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-7 h-7 rounded-full bg-neutral-200 dark:bg-neutral-700 flex items-center justify-center text-xs font-semibold text-neutral-700 dark:text-neutral-100">
+                      {(googleUser.name || googleUser.email || "G").charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="leading-tight">
+                    <div className="font-medium">{googleUser.name || "Google User"}</div>
+                    {googleUser.email ? (
+                      <div className="text-xs text-neutral-500 dark:text-neutral-300">{googleUser.email}</div>
+                    ) : null}
+                  </div>
+                  <button
+                    onClick={handleGoogleSignOut}
+                    className="text-xs border rounded-full px-2 py-1 hover:bg-neutral-50 dark:hover:bg-neutral-700 dark:border-neutral-600"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              ) : (
+                <div ref={googleButtonRef} style={{ minWidth: 150 }} className="flex justify-end">
+                  {!googleReady && (
+                    <button className="text-xs border rounded-full px-3 py-1.5 opacity-60 cursor-default" disabled>
+                      Loading Google…
+                    </button>
+                  )}
+                </div>
+              )
+            ) : (
+              <span className="text-xs text-rose-600 font-medium">
+                Add VITE_GOOGLE_CLIENT_ID
+              </span>
+            )}
             <button
               onClick={toggleTheme}
-              className="text-sm border rounded-xl px-3 py-1.5 mr-2 hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:border-neutral-700"
+              className="text-sm border rounded-xl px-3 py-1.5 hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:border-neutral-700"
               aria-label="Toggle dark mode"
             >
               {theme === "dark" ? "Light mode" : "Dark mode"}
             </button>
             <button
               onClick={newEvent}
-              className="text-sm border rounded-xl px-3 py-1.5 mr-2 hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:border-neutral-700"
+              disabled={editingLocked}
+              className="text-sm border rounded-xl px-3 py-1.5 hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               New event
             </button>
             <button
               onClick={copyShare}
-              className="text-sm border rounded-xl px-3 py-1.5 mr-2 hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:border-neutral-700"
+              disabled={editingLocked}
+              className="text-sm border rounded-xl px-3 py-1.5 hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed"
               title="Copy clean event link (loads from backend)"
             >
               Clean link
             </button>
             <button
               onClick={copyShareSnapshot}
-              className="text-sm px-3 py-1.5 rounded-xl font-semibold text-white bg-neutral-900 border border-neutral-900 shadow-sm hover:shadow-md hover:opacity-95 active:opacity-90 active:translate-y-px transition dark:bg-neutral-700 dark:border-neutral-500"
+              disabled={editingLocked}
+              className="text-sm px-3 py-1.5 rounded-xl font-semibold text-white bg-neutral-900 border border-neutral-900 shadow-sm hover:shadow-md hover:opacity-95 active:opacity-90 active:translate-y-px transition dark:bg-neutral-700 dark:border-neutral-500 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {copied ? "Copied!" : "Share snapshot"}
             </button>
           </div>
         </div>
+        {googleAuthError ? (
+          <div className="mx-auto max-w-5xl px-4 pb-3 text-xs text-rose-600">
+            {googleAuthError}
+          </div>
+        ) : null}
       </header>
-
+      {viewOnly ? (
+        <div className="mx-auto max-w-5xl px-4 pt-3 text-xs text-amber-700 bg-amber-50 border-b border-amber-100">
+          You’re in view-only mode. Ask the organizer for an editable link to make changes.
+        </div>
+      ) : null}
+      {!signedIn ? (
+        <div className="mx-auto max-w-5xl px-4 pt-3 text-xs text-sky-700 bg-sky-50 border-b border-sky-100">
+          Sign in with Google to edit events, build plans, and leave comments.
+        </div>
+      ) : null}
       <main className="mx-auto max-w-5xl px-4 py-6 grid md:grid-cols-3 gap-6">
         {lastError ? (
           <div className="md:col-span-3 mb-2 p-3 rounded-xl border border-rose-200 bg-rose-50 text-rose-800 text-sm">
@@ -746,7 +974,7 @@ export default function PivotPersonalBeta() {
                 value={event.name || ""}
                 onChange={(e) => setEvent((prev) => ({ ...prev, name: e.target.value }))}
                 placeholder="e.g., Bach 2025 Weekend"
-                disabled={viewOnly}
+                disabled={editingLocked}
               />
 
               <h3 className="font-medium mb-2">Links</h3>
@@ -756,40 +984,40 @@ export default function PivotPersonalBeta() {
                   placeholder="Google Drive folder URL"
                   value={links.driveFolder}
                   onChange={(e) => setLinks((l) => ({ ...l, driveFolder: e.target.value }))}
-                  disabled={viewOnly}
+                  disabled={editingLocked}
                 />
                 <input
                   className="w-full rounded-xl border px-3 py-2 text-sm dark:bg-neutral-800 dark:text-neutral-100 dark:border-neutral-700"
                   placeholder="Main Google Doc URL"
                   value={links.doc}
                   onChange={(e) => setLinks((l) => ({ ...l, doc: e.target.value }))}
-                  disabled={viewOnly}
+                  disabled={editingLocked}
                 />
                 <input
                   className="w-full rounded-xl border px-3 py-2 text-sm dark:bg-neutral-800 dark:text-neutral-100 dark:border-neutral-700"
                   placeholder="Google Calendar URL"
                   value={links.calendar}
                   onChange={(e) => setLinks((l) => ({ ...l, calendar: e.target.value }))}
-                  disabled={viewOnly}
+                  disabled={editingLocked}
                 />
                 <input
                   className="w-full rounded-xl border px-3 py-2 text-sm dark:bg-neutral-800 dark:text-neutral-100 dark:border-neutral-700"
                   placeholder="Google Sheet URL"
                   value={links.sheet}
                   onChange={(e) => setLinks((l) => ({ ...l, sheet: e.target.value }))}
-                  disabled={viewOnly}
+                  disabled={editingLocked}
                 />
                 <input
                   className="w-full rounded-xl border px-3 py-2 text-sm dark:bg-neutral-800 dark:text-neutral-100 dark:border-neutral-700"
                   placeholder="Notes/Log URL"
                   value={links.notes}
                   onChange={(e) => setLinks((l) => ({ ...l, notes: e.target.value }))}
-                  disabled={viewOnly}
+                  disabled={editingLocked}
                 />
               </div>
               <div className="mt-4">
                 <h3 className="font-medium mb-2">Checklist</h3>
-                <TodoList todos={todos} setTodos={setTodos} disabled={viewOnly} />
+                <TodoList todos={todos} setTodos={setTodos} disabled={editingLocked} />
               </div>
               <div className="mt-4">
                 <h3 className="font-medium mb-2">Notes</h3>
@@ -799,13 +1027,13 @@ export default function PivotPersonalBeta() {
                   placeholder="Quick notes for this event..."
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  disabled={viewOnly}
+                  disabled={editingLocked}
                 />
               </div>
               <div className="mt-4">
                 <h3 className="font-medium mb-2">Comments</h3>
                 {event.user && event.slug ? (
-                  <CommentsPanel user={event.user} slug={event.slug} disabled={viewOnly} />
+                  <CommentsPanel user={event.user} slug={event.slug} disabled={editingLocked} />
                 ) : (
                   <div className="text-xs text-neutral-500">Create an event to enable comments.</div>
                 )}
@@ -817,7 +1045,8 @@ export default function PivotPersonalBeta() {
                       const base = `${window.location.origin}${window.location.pathname}`;
                       navigator.clipboard.writeText(`${base}?view=1`).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); });
                     }}
-                    className="text-xs px-2 py-1 rounded-full border bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700"
+                    disabled={editingLocked}
+                    className="text-xs px-2 py-1 rounded-full border bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Copy view-only link
                   </button>
@@ -844,8 +1073,9 @@ export default function PivotPersonalBeta() {
             <div className="space-y-2">
               <label className="block text-sm text-neutral-600 dark:text-neutral-300">Pick a preset</label>
               <select
-                className="w-full rounded-xl border px-3 py-2 dark:bg-neutral-800 dark:text-neutral-100 dark:border-neutral-700"
+                className="w-full rounded-xl border px-3 py-2 dark:bg-neutral-800 dark:text-neutral-100 dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 value={start.label}
+                disabled={editingLocked}
                 onChange={(e) => {
                   const s = STARTS.find((x) => x.label === e.target.value);
                   setStart(s);
@@ -863,15 +1093,17 @@ export default function PivotPersonalBeta() {
               <label className="block text-sm text-neutral-600 dark:text-neutral-300 pt-2">Or search a location</label>
               <div className="flex gap-2">
                 <input
-                  className="flex-1 rounded-xl border px-3 py-2 text-sm dark:bg-neutral-800 dark:text-neutral-100 dark:border-neutral-700"
+                  className="flex-1 rounded-xl border px-3 py-2 text-sm dark:bg-neutral-800 dark:text-neutral-100 dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed"
                   placeholder="Address or place (e.g., 200 Park Ave, NYC)"
                   value={startSearch}
+                  disabled={editingLocked}
                   onChange={(e) => { setStartSearch(e.target.value); /* debounce via effect */ }}
                   onKeyDown={(e) => { if (e.key === 'Enter') { if (startMatches.length && startMatches[0]) { useStartMatch(startMatches[0]); } else { findStart(true); } } }}
                 />
                 <button
                   onClick={findStart}
-                  className="text-sm px-3 py-2 rounded-xl border bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700"
+                  disabled={editingLocked}
+                  className="text-sm px-3 py-2 rounded-xl border bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Search
                 </button>
@@ -886,14 +1118,15 @@ export default function PivotPersonalBeta() {
                 <div className="mt-2 space-y-1">
                   {startMatches.map((m, idx) => (
                     <div key={`${m.lat},${m.lng},${idx}`} className="flex items-center gap-2 text-sm">
-                      <div className="flex-1 truncate" title={m.label || m.description}>{m.label || m.description}</div>
-                      <button
-                        className="text-xs px-2 py-1 rounded-full border bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700"
-                        onClick={() => useStartMatch(m)}
-                      >
-                        Use
-                      </button>
-                    </div>
+                    <div className="flex-1 truncate" title={m.label || m.description}>{m.label || m.description}</div>
+                    <button
+                      className="text-xs px-2 py-1 rounded-full border bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={editingLocked}
+                      onClick={() => useStartMatch(m)}
+                    >
+                      Use
+                    </button>
+                  </div>
                   ))}
                 </div>
               )}
@@ -902,6 +1135,7 @@ export default function PivotPersonalBeta() {
                   id="gps"
                   type="checkbox"
                   checked={useGps}
+                  disabled={editingLocked}
                   onChange={(e) => setUseGps(e.target.checked)}
                 />
                 <label htmlFor="gps" className="text-sm">
@@ -919,8 +1153,9 @@ export default function PivotPersonalBeta() {
                 <button
                   key={v}
                   onClick={() => toggleVibe(v)}
+                  disabled={editingLocked}
                   className={
-                    "px-3 py-1.5 rounded-full border text-sm dark:border-neutral-700 " +
+                    "px-3 py-1.5 rounded-full border text-sm dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed " +
                     (vibes.includes(v)
                       ? "bg-neutral-900 text-white dark:bg-neutral-700 dark:text-neutral-100 dark:border-neutral-500"
                       : "bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700")
@@ -942,13 +1177,14 @@ export default function PivotPersonalBeta() {
                     priceCap === p
                       ? "bg-neutral-900 text-white dark:bg-neutral-700 dark:text-neutral-100 dark:border-neutral-500"
                       : "bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700"
-                  }`}
+                  } ${editingLocked ? "opacity-50 cursor-not-allowed" : ""}`}
                 >
                   <input
                     type="radio"
                     name="price"
                     className="hidden"
                     checked={priceCap === p}
+                    disabled={editingLocked}
                     onChange={() => setPriceCap(p)}
                   />
                   {"$".repeat(p)} or less
@@ -959,14 +1195,14 @@ export default function PivotPersonalBeta() {
 
           <div className="flex gap-3">
             <button
-              disabled={viewOnly}
+              disabled={editingLocked}
               onClick={() => buildPlan(new Set(), new Set(locked))}
               className="flex-1 rounded-2xl px-4 py-3 font-semibold text-white bg-neutral-900 border border-neutral-900 shadow-sm hover:shadow-md hover:opacity-95 active:opacity-90 active:translate-y-px transition dark:bg-neutral-700 dark:border-neutral-500 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Build plan
             </button>
             <button
-              disabled={viewOnly}
+              disabled={editingLocked}
               onClick={pivotOnce}
               className="flex-1 bg-white border rounded-2xl px-4 py-3 font-medium hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed"
               title="Swap suggestion"
@@ -974,7 +1210,7 @@ export default function PivotPersonalBeta() {
               Pivot
             </button>
             <button
-              disabled={viewOnly}
+              disabled={editingLocked}
               onClick={() => setLocked([])}
               className="px-3 py-3 text-sm text-neutral-600 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
               title="Clear all kept items"
@@ -982,7 +1218,7 @@ export default function PivotPersonalBeta() {
               Clear kept
             </button>
             <button
-              disabled={viewOnly}
+              disabled={editingLocked}
               onClick={() => setVetoed([])}
               className="px-3 py-3 text-sm text-neutral-600 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
               title="Clear vetoed options"
@@ -1012,7 +1248,15 @@ export default function PivotPersonalBeta() {
 
           <div className="grid gap-3">
             {selectedPlaces.map((p, i) => (
-              <PlaceCard key={p.id} place={p} index={i} start={startPoint} lockedSet={lockedSet} onToggleKeep={viewOnly ? null : toggleKeep} onVeto={viewOnly ? null : veto} />
+              <PlaceCard
+                key={p.id}
+                place={p}
+                index={i}
+                start={startPoint}
+                lockedSet={lockedSet}
+                onToggleKeep={editingLocked ? null : toggleKeep}
+                onVeto={editingLocked ? null : veto}
+              />
             ))}
           </div>
 
@@ -1021,7 +1265,13 @@ export default function PivotPersonalBeta() {
               <h3 className="font-semibold mb-2">Alternates</h3>
               <div className="grid md:grid-cols-2 gap-3">
                 {altPlaces.map((p) => (
-                  <AltCard key={p.id} place={p} start={startPoint} onPick={viewOnly ? null : (() => startReplaceWithAlternate(p))} onVeto={viewOnly ? null : (() => veto(p.id))} />
+                  <AltCard
+                    key={p.id}
+                    place={p}
+                    start={startPoint}
+                    onPick={editingLocked ? null : (() => startReplaceWithAlternate(p))}
+                    onVeto={editingLocked ? null : (() => veto(p.id))}
+                  />
                 ))}
               </div>
               {replacePick ? (() => {
