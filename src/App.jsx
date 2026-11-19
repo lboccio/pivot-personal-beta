@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabaseClient";
-import { textSearchBrowser, geocodeText, autocompletePredictions, placeDetails } from "./googlePlacesBrowser";
+import { textSearchBrowser, geocodeText, autocompletePredictions, placeDetails, placePreview } from "./googlePlacesBrowser";
 
 function haversineMiles(a, b) {
   const toRad = (d) => (d * Math.PI) / 180;
@@ -169,14 +169,53 @@ const STARTS = [
 
 const PLACES = [];
 
+// ---- Categories (what kind of place)
+const CATEGORIES = [
+  { id: "food", label: "Food", query: "restaurant" },
+  { id: "drinks", label: "Drinks", query: "bar" },
+  { id: "coffee", label: "Coffee", query: "coffee shop" },
+  { id: "entertainment", label: "Entertainment", query: "entertainment" },
+  { id: "outdoors", label: "Outdoors", query: "park" },
+  { id: "arts", label: "Arts & culture", query: "museum OR art gallery" },
+  { id: "shopping", label: "Shopping", query: "shopping" },
+];
+const CATEGORY_BY_ID = Object.fromEntries(CATEGORIES.map((c) => [c.id, c]));
+const LEGACY_CATEGORY = { eat: "food", bar: "drinks", park: "outdoors", gallery: "arts", shop: "shopping" };
+function categoryLabel(id) {
+  const key = LEGACY_CATEGORY[id] || id;
+  return CATEGORY_BY_ID[key]?.label || id || "";
+}
+
+const RANK_OPTIONS = [
+  { id: "rating", label: "Best rated" },
+  { id: "distance", label: "Closest" },
+  { id: "match", label: "Best match" },
+];
+
 // ---- Scoring
 function inferCategoryFromTypes(types = []) {
-  if (types.includes("cafe") || types.includes("coffee_shop")) return "coffee";
-  if (types.includes("restaurant")) return "eat";
-  if (types.includes("bar")) return "bar";
-  if (types.includes("park")) return "park";
-  if (types.includes("museum") || types.includes("art_gallery")) return "gallery";
-  return "shop";
+  const has = (t) => types.includes(t);
+  if (has("cafe") || has("coffee_shop")) return "coffee";
+  if (has("bar") || has("night_club")) return "drinks";
+  if (has("restaurant") || has("meal_takeaway") || has("bakery") || has("food")) return "food";
+  if (has("museum") || has("art_gallery") || has("library")) return "arts";
+  if (["movie_theater", "bowling_alley", "amusement_park", "aquarium", "zoo", "casino", "stadium", "tourist_attraction"].some(has)) return "entertainment";
+  if (has("park") || has("campground") || has("natural_feature")) return "outdoors";
+  if (has("shopping_mall") || types.some((t) => t.endsWith("_store"))) return "shopping";
+  return "other";
+}
+
+// Star rating weighted by how many reviews back it up (few reviews => pulled toward neutral).
+function ratingScore(place) {
+  if (typeof place.rating !== "number") return -1;
+  const confidence = Math.min(1, Math.log10((place.ratings || 0) + 1) / 3);
+  return (place.rating - 3.5) * 4 * confidence;
+}
+
+function formatCount(n) {
+  if (!n) return "0";
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+  return String(n);
 }
 
 function inferVibesFromNameTypes(p) {
@@ -203,7 +242,11 @@ function mapPlaceFromJs(p) {
     price: p.price_level ? Math.max(1, Math.min(3, p.price_level)) : 2,
     hours: { open: 0, close: 24 },
     noise: "med",
-    open_now: p.opening_hours?.isOpen?.() ?? p.opening_hours?.open_now ?? undefined
+    open_now: (() => { try { return p.opening_hours?.isOpen?.() ?? p.opening_hours?.open_now ?? undefined; } catch { return p.opening_hours?.open_now ?? undefined; } })(),
+    rating: typeof p.rating === "number" ? p.rating : null,
+    ratings: p.user_ratings_total || 0,
+    address: p.formatted_address || p.vicinity || "",
+    photo: (() => { try { return p.photos?.[0]?.getUrl?.({ maxWidth: 640 }) || ""; } catch { return ""; } })()
   };
 }
 function scorePlace(place, prefs) {
@@ -281,7 +324,19 @@ export default function PivotPersonalBeta() {
   const [todos, setTodos] = useState([]); // [{id,text,done}]
   const [notes, setNotes] = useState("");
   const [copied, setCopied] = useState(false);
+  const [categories, setCategories] = useState([]); // empty = anything
+  const [rankBy, setRankBy] = useState("rating");
+  const [building, setBuilding] = useState(false);
+  const [toast, setToast] = useState(null); // { id, msg }
+  const toastTimer = useRef(null);
+  const rebuildOnChangeRef = useRef(false);
+  function notify(msg) {
+    clearTimeout(toastTimer.current);
+    setToast({ id: Date.now(), msg });
+    toastTimer.current = setTimeout(() => setToast(null), 2400);
+  }
   const [livePlaces, setLivePlaces] = useState([]);
+  const livePlacesRef = useRef([]);
   const [lastError, setLastError] = useState("");
   const [debugInfo, setDebugInfo] = useState(null);
   const [startSearch, setStartSearch] = useState("");
@@ -335,6 +390,8 @@ export default function PivotPersonalBeta() {
       start,
       vibes,
       priceCap,
+      categories,
+      rankBy,
       plan,
       alternates,
       _savedAt: Date.now()
@@ -342,12 +399,12 @@ export default function PivotPersonalBeta() {
     try {
       localStorage.setItem(key, JSON.stringify(payload));
     } catch {}
-  }, [event, links, start, vibes, priceCap, plan, alternates]);
+  }, [event, links, start, vibes, priceCap, categories, rankBy, plan, alternates]);
 
   // Persist to backend (debounced) when event is defined
   useEffect(() => {
     if (!event.user || !event.slug) return;
-    const payload = { event, links, start, vibes, priceCap, plan, alternates, locked, todos, notes, _v: 1 };
+    const payload = { event, links, start, vibes, priceCap, categories, rankBy, plan, alternates, locked, todos, notes, _v: 1 };
     const ctrl = new AbortController();
     const t = setTimeout(() => {
       fetch(`/api/events/${event.user}/${event.slug}`,
@@ -355,7 +412,7 @@ export default function PivotPersonalBeta() {
       ).catch(() => {});
     }, 800);
     return () => { clearTimeout(t); ctrl.abort(); };
-  }, [event, links, start, vibes, priceCap, plan, alternates]);
+  }, [event, links, start, vibes, priceCap, categories, rankBy, plan, alternates]);
 
   // --- Theme (light/dark)
   const [theme, setTheme] = useState(() => {
@@ -484,6 +541,8 @@ export default function PivotPersonalBeta() {
               if (saved?.start) { startRestoredRef.current = true; setUseGps(false); setStart(saved.start); }
               if (saved?.vibes) setVibes(saved.vibes);
               if (typeof saved?.priceCap === "number") setPriceCap(saved.priceCap);
+              if (Array.isArray(saved?.categories)) setCategories(saved.categories.filter((c) => CATEGORY_BY_ID[c]));
+              if (RANK_OPTIONS.some((o) => o.id === saved?.rankBy)) setRankBy(saved.rankBy);
               if (Array.isArray(saved?.plan)) setPlan(saved.plan);
               if (Array.isArray(saved?.alternates)) setAlternates(saved.alternates);
               if (Array.isArray(saved?.locked)) setLocked(saved.locked);
@@ -501,6 +560,8 @@ export default function PivotPersonalBeta() {
               if (saved?.start) { startRestoredRef.current = true; setUseGps(false); setStart(saved.start); }
               if (saved?.vibes) setVibes(saved.vibes);
               if (typeof saved?.priceCap === "number") setPriceCap(saved.priceCap);
+              if (Array.isArray(saved?.categories)) setCategories(saved.categories.filter((c) => CATEGORY_BY_ID[c]));
+              if (RANK_OPTIONS.some((o) => o.id === saved?.rankBy)) setRankBy(saved.rankBy);
               if (Array.isArray(saved?.plan)) setPlan(saved.plan);
               if (Array.isArray(saved?.alternates)) setAlternates(saved.alternates);
               if (Array.isArray(saved?.locked)) setLocked(saved.locked);
@@ -523,6 +584,8 @@ export default function PivotPersonalBeta() {
         if (st.start) setStart(st.start);
         if (st.vibes) setVibes(st.vibes);
         if (typeof st.priceCap === "number") setPriceCap(st.priceCap);
+        if (Array.isArray(st.categories)) setCategories(st.categories.filter((c) => CATEGORY_BY_ID[c]));
+        if (RANK_OPTIONS.some((o) => o.id === st.rankBy)) setRankBy(st.rankBy);
         if (st.plan && Array.isArray(st.plan)) setPlan(st.plan);
         if (Array.isArray(st.locked)) setLocked(st.locked);
         if (Array.isArray(st.todos)) setTodos(st.todos);
@@ -558,10 +621,11 @@ export default function PivotPersonalBeta() {
         const preset = { label: "My location", lat: pos.coords.latitude, lng: pos.coords.longitude };
         setStart(preset);
         setGpsDenied(false);
+        notify("Using your current location");
         // Auto-build when GPS resolves (pass the new start; state hasn't updated yet)
         setTimeout(() => buildPlan(new Set(), new Set(locked), preset), 0);
       },
-      () => setGpsDenied(true),
+      () => { setGpsDenied(true); notify("Couldn't get your location — pick a start instead"); },
       { enableHighAccuracy: true, timeout: 8000 }
     );
   }, [useGps]);
@@ -610,6 +674,7 @@ export default function PivotPersonalBeta() {
         setStartSearch(match.label || "");
       }
       setStart(chosen);
+      notify(`Starting from ${chosen.label}`);
       startRestoredRef.current = true;
       setUseGps(false);
       setStartMatches([]);
@@ -621,33 +686,68 @@ export default function PivotPersonalBeta() {
   }
 
   async function buildPlan(exclude = new Set(), keep = new Set(), startOverride = null) {
+    setBuilding(true);
+    try {
+      const chosen = await buildPlanInner(exclude, keep, startOverride);
+      if (chosen && chosen.length) {
+        const names = chosen.map((id) => (livePlacesRef.current.find((p) => p.id === id) || {}).name).filter(Boolean);
+        notify(names.length ? `Plan ready: ${names.join(" → ")}` : "Plan updated");
+      }
+      return chosen;
+    } finally {
+      setBuilding(false);
+    }
+  }
+
+  async function buildPlanInner(exclude = new Set(), keep = new Set(), startOverride = null) {
     const startPoint = startOverride ? { lat: startOverride.lat, lng: startOverride.lng } : startPointState;
     const prefs = { vibes, priceCap, start: startPoint };
     setLastError("");
 
-    // Build a simple query from vibes
-    const q = vibes.includes("buzzy") ? "bar OR restaurant"
+    // One search per selected category; with no category, fall back to a vibe-based mix
+    const vibeQuery = vibes.includes("buzzy") ? "bar OR restaurant"
       : vibes.includes("artsy") ? "gallery OR museum OR cafe"
       : "coffee OR cafe OR restaurant";
+    const cats = categories.filter((c) => CATEGORY_BY_ID[c]);
+    const searches = cats.length
+      ? cats.map((c) => ({ cat: c, query: CATEGORY_BY_ID[c].query }))
+      : [{ cat: null, query: vibeQuery }];
 
     // Use current start location
     const loc = { lat: startPoint.lat, lng: startPoint.lng };
 
     let results = [];
     try {
-      results = await textSearchBrowser({ query: q, location: loc, radius: 1800, openNow: true });
-      setDebugInfo({ count: Array.isArray(results) ? results.length : 0 });
+      const settled = await Promise.allSettled(
+        searches.map(({ cat, query }) =>
+          textSearchBrowser({ query, location: loc, radius: 1800, openNow: true })
+            .then((rs) => rs.map((r) => ({ r, cat })))
+        )
+      );
+      const failed = settled.find((x) => x.status === "rejected");
+      results = settled.filter((x) => x.status === "fulfilled").flatMap((x) => x.value);
+      if (failed && !results.length) throw failed.reason;
+      setDebugInfo({ count: results.length });
     } catch (e) {
       console.error("[Pivot] buildPlan JS Places failed:", e);
       setLastError("Google Places request failed. " + (e?.message || ""));
       setPlan([]);
       setAlternates([]);
-      return;
+      return null;
     }
 
     const vetoSet = new Set(vetoed);
     const excludeAll = new Set([...(exclude || []), ...vetoSet]);
-    let mapped = results.map(mapPlaceFromJs).filter(p => p.lat && p.lng && !excludeAll.has(p.id));
+    const seenIds = new Set();
+    let mapped = [];
+    for (const { r, cat } of results) {
+      const p = mapPlaceFromJs(r);
+      if (!p.lat || !p.lng || !p.id || excludeAll.has(p.id) || seenIds.has(p.id)) continue;
+      // Trust the search it came from when type inference doesn't match a selected category
+      if (cat && !cats.includes(p.category)) p.category = cat;
+      seenIds.add(p.id);
+      mapped.push(p);
+    }
     // Ensure kept items exist in mapped by merging from known livePlaces
     if (keep && keep.size) {
       const byId = new Map(mapped.map(p => [p.id, p]));
@@ -662,17 +762,37 @@ export default function PivotPersonalBeta() {
       }
     }
     setLivePlaces(mapped);
+    livePlacesRef.current = mapped;
 
     if (!mapped.length) {
-      setLastError("No results returned. Check billing and that Maps JavaScript API is enabled.");
+      setLastError(cats.length
+        ? "Nothing open nearby for that filter right now. Try another category or start point."
+        : "No results returned. Check billing and that Maps JavaScript API is enabled.");
       setPlan([]);
       setAlternates([]);
-      return;
+      return null;
     }
 
-    const ranked = mapped
-      .map(p => ({ p, meta: scorePlace(p, prefs) }))
-      .sort((a, b) => b.meta.score - a.meta.score);
+    const rankKey = (p) => {
+      const match = scorePlace(p, prefs).score;
+      if (rankBy === "distance") return -haversineMiles(startPoint, { lat: p.lat, lng: p.lng });
+      if (rankBy === "match") return match;
+      return ratingScore(p) * 3 + match; // best rated (default)
+    };
+    let ranked = mapped
+      .map(p => ({ p, key: rankKey(p) }))
+      .sort((a, b) => b.key - a.key);
+
+    // With several categories, alternate between them (e.g. food → entertainment → food)
+    if (cats.length > 1) {
+      const buckets = cats.map((c) => ranked.filter((x) => x.p.category === c));
+      const rest = ranked.filter((x) => !cats.includes(x.p.category));
+      const mixed = [];
+      for (let i = 0; buckets.some((b) => i < b.length); i++) {
+        for (const b of buckets) if (b[i]) mixed.push(b[i]);
+      }
+      ranked = [...mixed, ...rest];
+    }
 
     // Keep any existing kept places first (preserve current order if possible)
     const keepIds = Array.from(keep).filter(id => mapped.some(m => m.id === id));
@@ -692,12 +812,13 @@ export default function PivotPersonalBeta() {
     setPlan(chosen);
     setAlternates(alts);
 
-    const state = { event, links, start, vibes, priceCap, plan: chosen, locked: Array.from(keep), todos, notes };
+    const state = { event, links, start, vibes, priceCap, categories, rankBy, plan: chosen, locked: Array.from(keep), todos, notes };
     const useCleanPath = event.user && event.slug;
     const newUrl = useCleanPath
       ? `${window.location.pathname}`
       : `${window.location.pathname}?${new URLSearchParams({ s: encodeState(state) }).toString()}`;
     window.history.replaceState({}, "", newUrl);
+    return chosen;
   }
 
   function pivotOnce() {
@@ -706,28 +827,48 @@ export default function PivotPersonalBeta() {
     buildPlan(exclude, keepSet);
   }
 
+  function placeName(id) {
+    return (livePlacesRef.current.find((p) => p.id === id) || livePlaces.find((p) => p.id === id) || {}).name || "that spot";
+  }
+
   function veto(id) {
     if (!id) return;
+    notify(`Vetoed ${placeName(id)} — finding a replacement…`);
     setVetoed(prev => (prev.includes(id) ? prev : [...prev, id]));
     setLocked(prev => prev.filter(x => x !== id));
     const keepSet = new Set(locked.filter(x => x !== id));
-    buildPlan(new Set(), keepSet);
+    // pass the id explicitly: the vetoed state update hasn't landed yet
+    buildPlan(new Set([id]), keepSet);
   }
 
+  // Rebuild after a filter change, once state has updated (only if a plan already exists)
+  useEffect(() => {
+    if (!rebuildOnChangeRef.current) return;
+    rebuildOnChangeRef.current = false;
+    if (plan.length) buildPlan(new Set(), new Set(locked));
+  }, [categories, rankBy, vibes, priceCap]);
+
   function toggleVibe(v) {
+    rebuildOnChangeRef.current = true;
     setVibes((prev) => (prev.includes(v) ? prev.filter((x) => x !== v) : [...prev, v]));
+  }
+
+  function toggleCategory(id) {
+    rebuildOnChangeRef.current = true;
+    if (id === null) { setCategories([]); return; }
+    setCategories((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
   function copyShare() {
     if (editingLocked) return;
     // Build a fresh share string so it reflects current state
-    const state = { event, links, start, vibes, priceCap, plan, locked, todos, notes };
+    const state = { event, links, start, vibes, priceCap, categories, rankBy, plan, locked, todos, notes };
     const useCleanPath = event.user && event.slug;
     const url = useCleanPath
       ? `${window.location.origin}${window.location.pathname}`
       : `${window.location.origin}${window.location.pathname}?${new URLSearchParams({ s: encodeState(state) }).toString()}`;
     navigator.clipboard.writeText(url).then(() => {
-      setCopied(true);
+      setCopied(true); notify("Link copied to clipboard");
       setTimeout(() => setCopied(false), 1200);
     });
   }
@@ -754,13 +895,16 @@ export default function PivotPersonalBeta() {
       price: p.price,
       hours: p.hours,
       noise: p.noise,
-      open_now: p.open_now
+      open_now: p.open_now,
+      rating: p.rating,
+      ratings: p.ratings,
+      address: p.address
     }));
-    const state = { event, links, start, vibes, priceCap, plan, locked, todos, notes, savedPlaces };
+    const state = { event, links, start, vibes, priceCap, categories, rankBy, plan, locked, todos, notes, savedPlaces };
     const qs = new URLSearchParams({ s: encodeState(state) }).toString();
     const url = `${window.location.origin}${window.location.pathname}?${qs}`;
     navigator.clipboard.writeText(url).then(() => {
-      setCopied(true);
+      setCopied(true); notify("Link copied to clipboard");
       setTimeout(() => setCopied(false), 1200);
     });
   }
@@ -815,6 +959,8 @@ export default function PivotPersonalBeta() {
   const lockedSet = useMemo(() => new Set(locked), [locked]);
 
   function toggleKeep(id) {
+    const wasKept = locked.includes(id);
+    notify(wasKept ? `Unkept ${placeName(id)}` : `Kept ${placeName(id)} — it'll stay when you Pivot`);
     setLocked(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
   }
   const [replacePick, setReplacePick] = useState(null); // { altId }
@@ -831,6 +977,7 @@ export default function PivotPersonalBeta() {
     setPlan(nextPlan);
     setAlternates(nextAlts);
     setReplacePick(null);
+    notify(`Swapped in ${altPlace.name} at stop ${targetIndex + 1}`);
   }
 
   function startReplaceWithAlternate(altPlace) {
@@ -839,11 +986,11 @@ export default function PivotPersonalBeta() {
       .map((id, i) => (lockedSet.has(id) ? null : i))
       .filter((i) => i !== null);
     if (openSlots.length === 0) {
-      alert("All current items are kept. Unkeep or Clear kept first.");
+      notify("All stops are kept. Unkeep one or Clear kept first.");
       return;
     }
     if (plan.includes(altPlace.id)) {
-      alert("That place is already in the plan.");
+      notify("That place is already in the plan.");
       return;
     }
     if (openSlots.length === 1) {
@@ -1058,7 +1205,7 @@ export default function PivotPersonalBeta() {
                   <button
                     onClick={() => {
                       const base = `${window.location.origin}${window.location.pathname}`;
-                      navigator.clipboard.writeText(`${base}?view=1`).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); });
+                      navigator.clipboard.writeText(`${base}?view=1`).then(() => { setCopied(true); notify("Link copied to clipboard"); setTimeout(() => setCopied(false), 1200); });
                     }}
                     disabled={editingLocked}
                     className="text-xs px-2 py-1 rounded-full border bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1094,6 +1241,7 @@ export default function PivotPersonalBeta() {
                 onChange={(e) => {
                   const s = STARTS.find((x) => x.label === e.target.value);
                   setStart(s);
+                  notify(`Starting from ${s.label}`);
                   setUseGps(false);
                   startRestoredRef.current = true;
                   setStartSearch(s?.label || "");
@@ -1166,6 +1314,47 @@ export default function PivotPersonalBeta() {
           </div>
 
           <div className="p-4 bg-white rounded-2xl shadow-sm border dark:bg-neutral-900 dark:border-neutral-800">
+            <h2 className="font-semibold mb-1">What are you up for?</h2>
+            <p className="text-xs text-neutral-500 dark:text-neutral-400 mb-3">Pick one or more. Several = a mixed plan.</p>
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Place categories">
+              {[{ id: null, label: "Anything" }, ...CATEGORIES].map((c) => {
+                const on = c.id === null ? categories.length === 0 : categories.includes(c.id);
+                return (
+                  <button
+                    key={c.label}
+                    onClick={() => toggleCategory(c.id)}
+                    disabled={editingLocked}
+                    aria-pressed={on}
+                    className={
+                      "px-3 py-1.5 rounded-full border text-sm dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed " +
+                      (on ? "bg-neutral-900 text-white dark:bg-neutral-700 dark:text-neutral-100 dark:border-neutral-500" : "bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700")
+                    }
+                  >
+                    {on ? "✓ " : ""}{c.label}
+                  </button>
+                );
+              })}
+            </div>
+            <h3 className="text-sm font-medium mt-4 mb-2">Rank by</h3>
+            <div className="inline-flex rounded-xl border overflow-hidden dark:border-neutral-700" role="group" aria-label="Rank by">
+              {RANK_OPTIONS.map((o) => (
+                <button
+                  key={o.id}
+                  onClick={() => { rebuildOnChangeRef.current = true; setRankBy(o.id); }}
+                  disabled={editingLocked}
+                  aria-pressed={rankBy === o.id}
+                  className={
+                    "px-3 py-1.5 text-sm border-r last:border-r-0 dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed " +
+                    (rankBy === o.id ? "bg-neutral-900 text-white dark:bg-neutral-700 dark:text-neutral-100 dark:border-neutral-500" : "bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700")
+                  }
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="p-4 bg-white rounded-2xl shadow-sm border dark:bg-neutral-900 dark:border-neutral-800">
             <h2 className="font-semibold mb-3">Vibe</h2>
             <div className="flex flex-wrap gap-2">
               {["cozy", "buzzy", "artsy", "low-stim"].map((v) => (
@@ -1173,6 +1362,7 @@ export default function PivotPersonalBeta() {
                   key={v}
                   onClick={() => toggleVibe(v)}
                   disabled={editingLocked}
+                  aria-pressed={vibes.includes(v)}
                   className={
                     "px-3 py-1.5 rounded-full border text-sm dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed " +
                     (vibes.includes(v)
@@ -1180,7 +1370,7 @@ export default function PivotPersonalBeta() {
                       : "bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700")
                   }
                 >
-                  {v}
+                  {vibes.includes(v) ? "✓ " : ""}{v}
                 </button>
               ))}
             </div>
@@ -1204,7 +1394,7 @@ export default function PivotPersonalBeta() {
                     className="hidden"
                     checked={priceCap === p}
                     disabled={editingLocked}
-                    onChange={() => setPriceCap(p)}
+                    onChange={() => { rebuildOnChangeRef.current = true; setPriceCap(p); }}
                   />
                   {"$".repeat(p)} or less
                 </label>
@@ -1214,23 +1404,24 @@ export default function PivotPersonalBeta() {
 
           <div className="flex gap-3">
             <button
-              disabled={editingLocked}
+              disabled={editingLocked || building}
+              aria-busy={building}
               onClick={() => buildPlan(new Set(), new Set(locked))}
-              className="flex-1 rounded-2xl px-4 py-3 font-semibold text-white bg-neutral-900 border border-neutral-900 shadow-sm hover:shadow-md hover:opacity-95 active:opacity-90 active:translate-y-px transition dark:bg-neutral-700 dark:border-neutral-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex-1 inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 font-semibold text-white bg-neutral-900 border border-neutral-900 shadow-sm hover:shadow-md hover:opacity-95 active:opacity-90 transition dark:bg-neutral-700 dark:border-neutral-500 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Build plan
+              {building ? <><Spinner /> Building…</> : "Build plan"}
             </button>
             <button
-              disabled={editingLocked}
-              onClick={pivotOnce}
+              disabled={editingLocked || building || !plan.length}
+              onClick={() => { notify("Pivoting — swapping in new spots…"); pivotOnce(); }}
               className="flex-1 bg-white border rounded-2xl px-4 py-3 font-medium hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Swap suggestion"
+              title={plan.length ? "Swap the stops you haven't kept" : "Build a plan first"}
             >
               Pivot
             </button>
             <button
               disabled={editingLocked}
-              onClick={() => setLocked([])}
+              onClick={() => { notify(locked.length ? `Cleared ${locked.length} kept` : "Nothing was kept"); setLocked([]); }}
               className="px-3 py-3 text-sm text-neutral-600 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
               title="Clear all kept items"
             >
@@ -1238,7 +1429,7 @@ export default function PivotPersonalBeta() {
             </button>
             <button
               disabled={editingLocked}
-              onClick={() => setVetoed([])}
+              onClick={() => { notify(vetoed.length ? `Cleared ${vetoed.length} veto${vetoed.length === 1 ? "" : "es"}` : "No vetoes to clear"); setVetoed([]); }}
               className="px-3 py-3 text-sm text-neutral-600 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
               title="Clear vetoed options"
             >
@@ -1259,13 +1450,18 @@ export default function PivotPersonalBeta() {
             </div>
           </div>
 
-          {selectedPlaces.length === 0 && (
+          {selectedPlaces.length === 0 && !building && (
             <div className="p-6 border rounded-2xl bg-white text-neutral-600 dark:bg-neutral-900 dark:text-neutral-300 dark:border-neutral-800">
               No plan yet. Choose a vibe and budget, then click <span className="font-medium">Build plan</span>.
             </div>
           )}
 
-          <div className="grid gap-3">
+          {building && (
+            <div className="flex items-center gap-2 text-sm text-neutral-600 dark:text-neutral-300" role="status">
+              <Spinner /> Finding spots…
+            </div>
+          )}
+          <div className={`grid gap-3 transition-opacity ${building ? "opacity-50" : ""}`}>
             {selectedPlaces.map((p, i) => (
               <PlaceCard
                 key={p.id}
@@ -1328,6 +1524,14 @@ export default function PivotPersonalBeta() {
           )}
         </section>
       </main>
+
+      <div aria-live="polite" className="fixed inset-x-0 bottom-4 z-50 flex justify-center px-4 pointer-events-none">
+        {toast ? (
+          <div key={toast.id} className="pv-pop pointer-events-auto max-w-md rounded-full bg-neutral-900 text-white text-sm px-4 py-2 shadow-lg dark:bg-neutral-100 dark:text-neutral-900">
+            {toast.msg}
+          </div>
+        ) : null}
+      </div>
 
       <footer className="py-8 text-center text-xs text-neutral-500">
         Pivot personal beta • No accounts • Fictionalized data • Built for rapid solo testing
@@ -1399,7 +1603,9 @@ function PlaceCard({ place, index, start, lockedSet, onToggleKeep, onVeto }) {
   const isKept = lockedSet ? lockedSet.has(place.id) : false;
 
   return (
-    <div className="p-4 bg-white rounded-2xl border shadow-sm flex items-start gap-4 dark:bg-neutral-900 dark:border-neutral-800">
+    <HoverPreview place={place}>
+    {({ open, toggle }) => (
+    <div className={`pv-pop p-4 bg-white rounded-2xl border shadow-sm flex items-start gap-4 dark:bg-neutral-900 dark:border-neutral-800 transition-shadow ${isKept ? "ring-2 ring-emerald-500/70" : ""} ${open ? "shadow-md" : ""}`}>
       <div className="w-8 h-8 rounded-full bg-neutral-900 text-white flex items-center justify-center font-semibold">
         {index + 1}
       </div>
@@ -1407,15 +1613,17 @@ function PlaceCard({ place, index, start, lockedSet, onToggleKeep, onVeto }) {
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <div className="font-semibold">{place.name}</div>
           <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-100 dark:bg-neutral-800 dark:text-neutral-200">{place.neighborhood}</span>
-          <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-100 dark:bg-neutral-800 dark:text-neutral-200">{place.category}</span>
+          <RatingBadge place={place} />
+          <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-100 dark:bg-neutral-800 dark:text-neutral-200">{categoryLabel(place.category)}</span>
           <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-100 dark:bg-neutral-800 dark:text-neutral-200">{priceToSymbol(place.price)}</span>
           {onToggleKeep ? (
             <button
               onClick={() => onToggleKeep(place.id)}
               className={`ml-auto text-xs px-2 py-0.5 rounded-full border ${isKept ? 'bg-neutral-900 text-white dark:bg-neutral-700 dark:border-neutral-500' : 'bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700'}`}
               title={isKept ? 'Kept in plan' : 'Keep this spot'}
+              aria-pressed={isKept}
             >
-              {isKept ? 'Kept' : 'Keep'}
+              {isKept ? '✓ Kept' : 'Keep'}
             </button>
           ) : null}
         </div>
@@ -1427,15 +1635,18 @@ function PlaceCard({ place, index, start, lockedSet, onToggleKeep, onVeto }) {
         {reasons.length > 0 && (
           <div className="mt-2 text-xs text-neutral-600">Why we picked it: {reasons.join(" · ")}</div>
         )}
-        <div className="mt-3">
+        <div className="mt-3 flex items-center gap-4">
           <a
             className="text-sm underline"
-            href={`https://www.google.com/maps?q=${place.lat},${place.lng}`}
+            href={mapsLink(place)}
             target="_blank"
             rel="noreferrer"
           >
             Open in Maps
           </a>
+          <button onClick={toggle} className="text-sm underline text-neutral-600 dark:text-neutral-300" aria-expanded={open}>
+            {open ? "Hide details" : "Details"}
+          </button>
         </div>
         <div className="mt-3 flex gap-2 items-center">
           {place.vibes.map((v) => (
@@ -1460,6 +1671,8 @@ function PlaceCard({ place, index, start, lockedSet, onToggleKeep, onVeto }) {
         </div>
       </div>
     </div>
+    )}
+    </HoverPreview>
   );
 }
 
@@ -1468,9 +1681,13 @@ function AltCard({ place, start, onPick, onVeto }) {
   const mins = minutesWalk(dist);
   const os = openStatus(place);
   return (
-    <div className="p-3 bg-white rounded-2xl border dark:bg-neutral-900 dark:border-neutral-800">
+    <HoverPreview place={place}>
+    {({ open, toggle }) => (
+    <div className={`pv-pop p-3 bg-white rounded-2xl border dark:bg-neutral-900 dark:border-neutral-800 transition-shadow ${open ? "shadow-md" : ""}`}>
       <div className="font-medium">{place.name}</div>
       <div className="text-xs text-neutral-600 dark:text-neutral-300 mt-0.5 flex flex-wrap gap-2">
+        {typeof place.rating === "number" ? <span>★ {place.rating.toFixed(1)} ({formatCount(place.ratings)})</span> : null}
+        <span>{categoryLabel(place.category)}</span>
         <span>{place.neighborhood}</span>
         <span>{priceToSymbol(place.price)}</span>
         <span>{os.label}</span>
@@ -1479,12 +1696,15 @@ function AltCard({ place, start, onPick, onVeto }) {
       <div className="mt-2 flex gap-3 items-center">
         <a
           className="text-xs underline inline-block"
-          href={`https://www.google.com/maps?q=${place.lat},${place.lng}`}
+          href={mapsLink(place)}
           target="_blank"
           rel="noreferrer"
         >
           Open in Maps
         </a>
+        <button onClick={toggle} className="text-xs underline text-neutral-600 dark:text-neutral-300" aria-expanded={open}>
+          {open ? "Hide" : "Details"}
+        </button>
         {onPick ? (
           <button
             className="text-xs px-2 py-1 rounded-full border bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700"
@@ -1502,6 +1722,136 @@ function AltCard({ place, start, onPick, onVeto }) {
           >
             Veto
           </button>
+        ) : null}
+      </div>
+    </div>
+    )}
+    </HoverPreview>
+  );
+}
+
+function mapsLink(place) {
+  const q = encodeURIComponent(place.name || `${place.lat},${place.lng}`);
+  return place.id
+    ? `https://www.google.com/maps/search/?api=1&query=${q}&query_place_id=${encodeURIComponent(place.id)}`
+    : `https://www.google.com/maps?q=${place.lat},${place.lng}`;
+}
+
+function Spinner() {
+  return (
+    <svg className="pv-spin w-4 h-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.25" strokeWidth="3" />
+      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function RatingBadge({ place }) {
+  if (typeof place.rating !== "number") return null;
+  return (
+    <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300" title={`${place.rating} stars from ${place.ratings || 0} Google reviews`}>
+      ★ {place.rating.toFixed(1)} <span className="opacity-70">({formatCount(place.ratings)})</span>
+    </span>
+  );
+}
+
+// Shows a details panel on hover (mouse) or via the card's Details button (touch / keyboard).
+function HoverPreview({ place, children }) {
+  const [open, setOpen] = useState(false);
+  const timer = useRef(null);
+  const canHover = useMemo(() => typeof window !== "undefined" && window.matchMedia?.("(hover: hover)").matches, []);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => {
+        if (!canHover) return;
+        clearTimeout(timer.current);
+        timer.current = setTimeout(() => setOpen(true), 350);
+      }}
+      onMouseLeave={() => {
+        if (!canHover) return;
+        clearTimeout(timer.current);
+        timer.current = setTimeout(() => setOpen(false), 180);
+      }}
+    >
+      {children({ open, toggle: () => { clearTimeout(timer.current); setOpen((o) => !o); } })}
+      {open ? (
+        <div className="absolute left-0 right-0 top-full z-30 pt-2">
+          <PlacePreviewPanel place={place} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PlacePreviewPanel({ place }) {
+  const [info, setInfo] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let alive = true;
+    setError("");
+    placePreview(place.id)
+      .then((d) => { if (alive) setInfo(d); })
+      .catch(() => { if (alive) setError("Couldn't load details for this place."); });
+    return () => { alive = false; };
+  }, [place.id]);
+
+  const photo = info?.photo || place.photo;
+  const rating = info?.rating ?? place.rating;
+  const ratings = info?.ratings || place.ratings;
+  const loading = !info && !error;
+
+  return (
+    <div className="pv-pop rounded-2xl border bg-white shadow-xl overflow-hidden text-sm dark:bg-neutral-900 dark:border-neutral-700">
+      {photo ? (
+        <img src={photo} alt="" className="w-full h-36 object-cover bg-neutral-100 dark:bg-neutral-800" loading="lazy" />
+      ) : loading ? (
+        <div className="pv-shimmer w-full h-36 bg-neutral-100 dark:bg-neutral-800" />
+      ) : null}
+      <div className="p-4 space-y-2">
+        <div className="flex flex-wrap items-baseline gap-x-2">
+          <div className="font-semibold">{place.name}</div>
+          {typeof rating === "number" ? (
+            <span className="text-amber-700 dark:text-amber-300">★ {rating.toFixed(1)} <span className="text-neutral-500">({(ratings || 0).toLocaleString()})</span></span>
+          ) : null}
+          <span className="text-neutral-500">{categoryLabel(place.category)} · {priceToSymbol(place.price)}</span>
+        </div>
+        {loading ? (
+          <div className="space-y-1.5">
+            <div className="pv-shimmer h-3 rounded bg-neutral-100 dark:bg-neutral-800" />
+            <div className="pv-shimmer h-3 w-4/5 rounded bg-neutral-100 dark:bg-neutral-800" />
+          </div>
+        ) : error ? (
+          <p className="text-neutral-500">{error}</p>
+        ) : info.summary ? (
+          <p className="text-neutral-700 dark:text-neutral-200">{info.summary}</p>
+        ) : info.review ? (
+          <p className="text-neutral-700 dark:text-neutral-200">
+            <span className="text-neutral-500">From a review{info.review.rating ? ` (${info.review.rating}★)` : ""}: </span>
+            “{info.review.text.length > 220 ? `${info.review.text.slice(0, 220).trim()}…` : info.review.text}”
+          </p>
+        ) : (
+          <p className="text-neutral-500">No description available.</p>
+        )}
+        {info ? (
+          <div className="text-xs text-neutral-600 dark:text-neutral-300 space-y-0.5">
+            {info.hoursToday ? <div>{info.openNow === true ? "Open now · " : info.openNow === false ? "Closed now · " : ""}{info.hoursToday}</div> : null}
+            {info.address ? <div>{info.address}</div> : null}
+            {info.phone ? <div>{info.phone}</div> : null}
+          </div>
+        ) : null}
+        {info ? (
+          <div className="flex gap-4 pt-1">
+            {info.website ? <a className="underline" href={info.website} target="_blank" rel="noreferrer">Website</a> : null}
+            <a className="underline" href={info.mapsUrl || mapsLink(place)} target="_blank" rel="noreferrer">Google Maps</a>
+          </div>
         ) : null}
       </div>
     </div>
