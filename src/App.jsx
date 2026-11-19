@@ -827,6 +827,23 @@ export default function PivotPersonalBeta() {
     buildPlan(exclude, keepSet);
   }
 
+  // Clear the plan but keep the preferences on the left (start, categories, rank, vibe, budget)
+  function resetPlan() {
+    rebuildOnChangeRef.current = false;
+    setPlan([]);
+    setAlternates([]);
+    setLocked([]);
+    setReplacePick(null);
+    setLastError("");
+    // drop any ?s= snapshot from the URL, keep the event path and ?view=1
+    const params = new URLSearchParams(window.location.search);
+    params.delete("s");
+    const qs = params.toString();
+    window.history.replaceState({}, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    notify("Fresh start — your preferences are kept");
+  }
+
   function placeName(id) {
     return (livePlacesRef.current.find((p) => p.id === id) || livePlaces.find((p) => p.id === id) || {}).name || "that spot";
   }
@@ -1006,9 +1023,14 @@ export default function PivotPersonalBeta() {
       <header className="sticky top-0 z-10 backdrop-blur bg-white/70 border-b dark:bg-neutral-800/70 dark:border-neutral-700">
         <div className="mx-auto max-w-5xl px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="text-xl font-semibold">
+            <a
+              href={window.location.pathname}
+              onClick={(e) => { e.preventDefault(); resetPlan(); }}
+              className="text-xl font-semibold rounded-lg hover:opacity-80"
+              title="Start over (keeps your preferences)"
+            >
               Pivot <span className="text-sm align-top">beta practice run ✨</span>
-            </div>
+            </a>
             <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">personal build</span>
             <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
               {import.meta.env.VITE_GOOGLE_MAPS_API_KEY ? "API key loaded" : "API key missing"}
