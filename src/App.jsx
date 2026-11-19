@@ -264,7 +264,14 @@ function titleFromSlug(slug = "") {
 
 export default function PivotPersonalBeta() {
   const [start, setStart] = useState(STARTS[0]);
-  const [useGps, setUseGps] = useState(false);
+  // Default to the user's current location, except for view-only links and shared snapshots (?s=)
+  const [useGps, setUseGps] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("view") !== "1" && !params.get("s");
+  });
+  // Set once a saved event start is restored, so GPS doesn't overwrite it
+  const startRestoredRef = useRef(false);
   const [gpsDenied, setGpsDenied] = useState(false);
   const [vibes, setVibes] = useState(["cozy"]);
   const [priceCap, setPriceCap] = useState(2);
@@ -474,7 +481,7 @@ export default function PivotPersonalBeta() {
               const saved = await res.json();
               if (saved?.event) setEvent((e) => ({ ...e, ...saved.event }));
               if (saved?.links) setLinks((l) => ({ ...l, ...saved.links }));
-              if (saved?.start) setStart(saved.start);
+              if (saved?.start) { startRestoredRef.current = true; setUseGps(false); setStart(saved.start); }
               if (saved?.vibes) setVibes(saved.vibes);
               if (typeof saved?.priceCap === "number") setPriceCap(saved.priceCap);
               if (Array.isArray(saved?.plan)) setPlan(saved.plan);
@@ -491,7 +498,7 @@ export default function PivotPersonalBeta() {
             const raw = localStorage.getItem(key);
             if (raw) {
               const saved = JSON.parse(raw);
-              if (saved?.start) setStart(saved.start);
+              if (saved?.start) { startRestoredRef.current = true; setUseGps(false); setStart(saved.start); }
               if (saved?.vibes) setVibes(saved.vibes);
               if (typeof saved?.priceCap === "number") setPriceCap(saved.priceCap);
               if (Array.isArray(saved?.plan)) setPlan(saved.plan);
@@ -547,11 +554,12 @@ export default function PivotPersonalBeta() {
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        if (startRestoredRef.current) return;
         const preset = { label: "My location", lat: pos.coords.latitude, lng: pos.coords.longitude };
         setStart(preset);
         setGpsDenied(false);
-        // Auto-build when GPS resolves
-        setTimeout(() => buildPlan(new Set(), new Set(locked)), 0);
+        // Auto-build when GPS resolves (pass the new start; state hasn't updated yet)
+        setTimeout(() => buildPlan(new Set(), new Set(locked), preset), 0);
       },
       () => setGpsDenied(true),
       { enableHighAccuracy: true, timeout: 8000 }
@@ -563,7 +571,7 @@ export default function PivotPersonalBeta() {
     }
   }, [editingLocked, useGps]);
 
-  const startPoint = useMemo(() => ({ lat: start.lat, lng: start.lng }), [start]);
+  const startPointState = useMemo(() => ({ lat: start.lat, lng: start.lng }), [start]);
 
   async function findStart(force = false) {
     const q = (startSearch || "").trim();
@@ -592,24 +600,28 @@ export default function PivotPersonalBeta() {
 
   async function useStartMatch(match) {
     try {
+      let chosen;
       if (match.place_id) {
         const det = await placeDetails(match.place_id);
-        setStart({ label: det.label, lat: det.lat, lng: det.lng });
+        chosen = { label: det.label, lat: det.lat, lng: det.lng };
         setStartSearch(det.label || "");
       } else {
-        setStart({ label: match.label, lat: match.lat, lng: match.lng });
+        chosen = { label: match.label, lat: match.lat, lng: match.lng };
         setStartSearch(match.label || "");
       }
+      setStart(chosen);
+      startRestoredRef.current = true;
       setUseGps(false);
       setStartMatches([]);
       // Auto-build after confirming a start
-      setTimeout(() => buildPlan(new Set(), new Set(locked)), 0);
+      setTimeout(() => buildPlan(new Set(), new Set(locked), chosen), 0);
     } catch (e) {
       setStartError("Could not select that place");
     }
   }
 
-  async function buildPlan(exclude = new Set(), keep = new Set()) {
+  async function buildPlan(exclude = new Set(), keep = new Set(), startOverride = null) {
+    const startPoint = startOverride ? { lat: startOverride.lat, lng: startOverride.lng } : startPointState;
     const prefs = { vibes, priceCap, start: startPoint };
     setLastError("");
 
@@ -1083,10 +1095,14 @@ export default function PivotPersonalBeta() {
                   const s = STARTS.find((x) => x.label === e.target.value);
                   setStart(s);
                   setUseGps(false);
+                  startRestoredRef.current = true;
                   setStartSearch(s?.label || "");
-                  setTimeout(() => buildPlan(new Set(), new Set(locked)), 0);
+                  setTimeout(() => buildPlan(new Set(), new Set(locked), s), 0);
                 }}
               >
+                {!STARTS.some((s) => s.label === start.label) && (
+                  <option value={start.label} disabled>{start.label}</option>
+                )}
                 {STARTS.map((s) => (
                   <option key={s.label} value={s.label}>
                     {s.label}
@@ -1139,7 +1155,7 @@ export default function PivotPersonalBeta() {
                   type="checkbox"
                   checked={useGps}
                   disabled={editingLocked}
-                  onChange={(e) => setUseGps(e.target.checked)}
+                  onChange={(e) => { if (e.target.checked) startRestoredRef.current = false; setUseGps(e.target.checked); }}
                 />
                 <label htmlFor="gps" className="text-sm">
                   Use my location
@@ -1255,7 +1271,7 @@ export default function PivotPersonalBeta() {
                 key={p.id}
                 place={p}
                 index={i}
-                start={startPoint}
+                start={startPointState}
                 lockedSet={lockedSet}
                 onToggleKeep={editingLocked ? null : toggleKeep}
                 onVeto={editingLocked ? null : veto}
@@ -1271,7 +1287,7 @@ export default function PivotPersonalBeta() {
                   <AltCard
                     key={p.id}
                     place={p}
-                    start={startPoint}
+                    start={startPointState}
                     onPick={editingLocked ? null : (() => startReplaceWithAlternate(p))}
                     onVeto={editingLocked ? null : (() => veto(p.id))}
                   />
