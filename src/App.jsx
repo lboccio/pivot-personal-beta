@@ -55,6 +55,9 @@ function priceToSymbol(p) {
   return "$".repeat(p);
 }
 
+// "New event" and "Clean link" header buttons are hidden for now; their functions still exist.
+const SHOW_EVENT_BUTTONS = false;
+
 const GOOGLE_ID_SCRIPT_SRC = "https://accounts.google.com/gsi/client";
 
 function loadGoogleIdentityScript() {
@@ -1086,6 +1089,7 @@ export default function PivotPersonalBeta() {
             >
               {theme === "dark" ? "Light mode" : "Dark mode"}
             </button>
+            {SHOW_EVENT_BUTTONS ? (<>
             <button
               onClick={newEvent}
               disabled={editingLocked}
@@ -1101,6 +1105,7 @@ export default function PivotPersonalBeta() {
             >
               Clean link
             </button>
+            </>) : null}
             <button
               onClick={copyShareSnapshot}
               disabled={editingLocked}
