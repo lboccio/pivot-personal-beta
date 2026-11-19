@@ -1335,6 +1335,48 @@ export default function PivotPersonalBeta() {
             </div>
           </div>
 
+          <div className="space-y-2">
+          <div className="flex gap-3">
+            <button
+              disabled={editingLocked || building}
+              aria-busy={building}
+              onClick={() => buildPlan(new Set(), new Set(locked))}
+              className="flex-[2] whitespace-nowrap inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 font-semibold text-white bg-neutral-900 border border-neutral-900 shadow-sm hover:shadow-md hover:opacity-95 active:opacity-90 transition dark:bg-neutral-700 dark:border-neutral-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {building ? <><Spinner /> Building…</> : "Build plan"}
+            </button>
+            <button
+              disabled={editingLocked || building || !plan.length}
+              onClick={() => { notify("Pivoting — swapping in new spots…"); pivotOnce(); }}
+              className="flex-1 bg-white border rounded-2xl px-4 py-3 font-medium hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              title={plan.length ? "Swap the stops you haven't kept" : "Build a plan first"}
+            >
+              Pivot
+            </button>
+          </div>
+          <div className="flex items-center gap-4 px-1">
+            <button
+              disabled={editingLocked}
+              onClick={() => { notify(locked.length ? `Cleared ${locked.length} kept` : "Nothing was kept"); setLocked([]); }}
+              className="text-xs text-neutral-600 dark:text-neutral-300 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Clear all kept items"
+            >
+              Clear kept
+            </button>
+            <button
+              disabled={editingLocked}
+              onClick={() => { notify(vetoed.length ? `Cleared ${vetoed.length} veto${vetoed.length === 1 ? "" : "es"}` : "No vetoes to clear"); setVetoed([]); }}
+              className="text-xs text-neutral-600 dark:text-neutral-300 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Clear vetoed options"
+            >
+              Clear vetoes
+            </button>
+          </div>
+          <p className="text-xs text-neutral-500 px-1">
+            Tip: hit <b>Build plan</b> first, then use <b>Pivot</b> to cycle alternates.
+          </p>
+          </div>
+
           <div className="p-4 bg-white rounded-2xl shadow-sm border dark:bg-neutral-900 dark:border-neutral-800">
             <h2 className="font-semibold mb-1">What are you up for?</h2>
             <p className="text-xs text-neutral-500 dark:text-neutral-400 mb-3">Pick one or more. Several = a mixed plan.</p>
@@ -1423,44 +1465,6 @@ export default function PivotPersonalBeta() {
               ))}
             </div>
           </div>
-
-          <div className="flex gap-3">
-            <button
-              disabled={editingLocked || building}
-              aria-busy={building}
-              onClick={() => buildPlan(new Set(), new Set(locked))}
-              className="flex-1 inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 font-semibold text-white bg-neutral-900 border border-neutral-900 shadow-sm hover:shadow-md hover:opacity-95 active:opacity-90 transition dark:bg-neutral-700 dark:border-neutral-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {building ? <><Spinner /> Building…</> : "Build plan"}
-            </button>
-            <button
-              disabled={editingLocked || building || !plan.length}
-              onClick={() => { notify("Pivoting — swapping in new spots…"); pivotOnce(); }}
-              className="flex-1 bg-white border rounded-2xl px-4 py-3 font-medium hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:border-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              title={plan.length ? "Swap the stops you haven't kept" : "Build a plan first"}
-            >
-              Pivot
-            </button>
-            <button
-              disabled={editingLocked}
-              onClick={() => { notify(locked.length ? `Cleared ${locked.length} kept` : "Nothing was kept"); setLocked([]); }}
-              className="px-3 py-3 text-sm text-neutral-600 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Clear all kept items"
-            >
-              Clear kept
-            </button>
-            <button
-              disabled={editingLocked}
-              onClick={() => { notify(vetoed.length ? `Cleared ${vetoed.length} veto${vetoed.length === 1 ? "" : "es"}` : "No vetoes to clear"); setVetoed([]); }}
-              className="px-3 py-3 text-sm text-neutral-600 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Clear vetoed options"
-            >
-              Clear vetoes
-            </button>
-          </div>
-          <p className="text-xs text-neutral-500">
-            Tip: hit <b>Build plan</b> first, then use <b>Pivot</b> to cycle alternates.
-          </p>
         </section>
 
         {/* Plan */}
