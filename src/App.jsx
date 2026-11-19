@@ -281,7 +281,10 @@ export default function PivotPersonalBeta() {
   const [startMatches, setStartMatches] = useState([]);
   const [startLoading, setStartLoading] = useState(false);
   const [startError, setStartError] = useState("");
-  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+  // Google login is temporarily disabled so the editor is usable without signing in.
+  // Flip REQUIRE_GOOGLE_LOGIN back to true once the Google Cloud OAuth client is fixed.
+  const REQUIRE_GOOGLE_LOGIN = false;
+  const googleClientId = REQUIRE_GOOGLE_LOGIN ? import.meta.env.VITE_GOOGLE_CLIENT_ID : "";
   const [googleUser, setGoogleUser] = useState(() => {
     if (typeof window === "undefined") return null;
     try {
@@ -296,7 +299,7 @@ export default function PivotPersonalBeta() {
   const googleButtonRef = useRef(null);
   const viewOnly = useMemo(() => new URLSearchParams(window.location.search).get("view") === "1", []);
   const signedIn = Boolean(googleUser);
-  const editingLocked = viewOnly || !signedIn;
+  const editingLocked = viewOnly || (REQUIRE_GOOGLE_LOGIN && !signedIn);
   const [vetoed, setVetoed] = useState(() => {
     try { const raw = sessionStorage.getItem(vetoKey()); return raw ? JSON.parse(raw) : []; } catch { return []; }
   });
@@ -890,11 +893,11 @@ export default function PivotPersonalBeta() {
                   )}
                 </div>
               )
-            ) : (
+            ) : REQUIRE_GOOGLE_LOGIN ? (
               <span className="text-xs text-rose-600 font-medium">
                 Add VITE_GOOGLE_CLIENT_ID
               </span>
-            )}
+            ) : null}
             <button
               onClick={toggleTheme}
               className="text-sm border rounded-xl px-3 py-1.5 hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:border-neutral-700"
@@ -937,7 +940,7 @@ export default function PivotPersonalBeta() {
           You’re in view-only mode. Ask the organizer for an editable link to make changes.
         </div>
       ) : null}
-      {!signedIn ? (
+      {REQUIRE_GOOGLE_LOGIN && !signedIn ? (
         <div className="mx-auto max-w-5xl px-4 pt-3 text-xs text-sky-700 bg-sky-50 border-b border-sky-100">
           Sign in with Google to edit events, build plans, and leave comments.
         </div>
