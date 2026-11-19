@@ -2,6 +2,9 @@
 @source "../index.html";
 @source "./**/*.{js,jsx,ts,tsx}";
 
+/* Dark mode follows the in-app toggle (.dark on a wrapper), not just the OS setting */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --nf-100: #f5f5f5;
   --nf-300: #d4d4d4;
@@ -26,4 +29,36 @@
   .dark .dark\:border-neutral-700 { border-color: var(--nf-700); }
   .dark .dark\:border-neutral-800 { border-color: var(--nf-800); }
   .dark .dark\:border-neutral-500 { border-color: #737373; }
+}
+
+
+/* ---- Click feedback ---- */
+@layer base {
+  button:not(:disabled), [role="button"], label.cursor-pointer {
+    transition: transform 80ms ease, background-color 150ms ease, box-shadow 150ms ease, opacity 150ms ease;
+  }
+  button:not(:disabled):active, label.cursor-pointer:active {
+    transform: scale(0.96);
+  }
+  button:focus-visible, a:focus-visible {
+    outline: 2px solid #10b981;
+    outline-offset: 2px;
+  }
+}
+
+@keyframes pv-pop {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.pv-pop { animation: pv-pop 220ms ease-out; }
+
+@keyframes pv-spin { to { transform: rotate(360deg); } }
+.pv-spin { animation: pv-spin 0.8s linear infinite; }
+
+@keyframes pv-shimmer { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+.pv-shimmer { animation: pv-shimmer 1.2s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pv-pop, .pv-shimmer { animation: none; }
+  button:not(:disabled):active, label.cursor-pointer:active { transform: none; }
 }
